@@ -9,12 +9,19 @@ let audioQueue: Queue | null = null
 
 function getQueue() {
   if (!audioQueue) {
-    redis = new Redis({
-      host: process.env.REDIS_HOST || 'localhost',
-      port: parseInt(process.env.REDIS_PORT || '6379'),
-      password: process.env.REDIS_PASSWORD || undefined,
-      maxRetriesPerRequest: null,
-    })
+    // Support both REDIS_URL (Railway external) and separate host/port/password
+    if (process.env.REDIS_URL) {
+      redis = new Redis(process.env.REDIS_URL, {
+        maxRetriesPerRequest: null,
+      })
+    } else {
+      redis = new Redis({
+        host: process.env.REDIS_HOST || 'localhost',
+        port: parseInt(process.env.REDIS_PORT || '6379'),
+        password: process.env.REDIS_PASSWORD || undefined,
+        maxRetriesPerRequest: null,
+      })
+    }
     audioQueue = new Queue('audio-generation', {
       connection: redis as unknown as ConnectionOptions,
     })

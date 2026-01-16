@@ -72,12 +72,15 @@ export async function POST(
     console.log(`Deleted chunks for chapter ${chapterId}, queueing regeneration...`)
 
     // Re-queue the audio generation job
-    const redis = new IORedis({
-      host: process.env.REDIS_HOST || 'localhost',
-      port: parseInt(process.env.REDIS_PORT || '6379'),
-      password: process.env.REDIS_PASSWORD || undefined,
-      maxRetriesPerRequest: null,
-    })
+    // Support both REDIS_URL (Railway external) and separate host/port/password
+    const redis = process.env.REDIS_URL 
+      ? new IORedis(process.env.REDIS_URL, { maxRetriesPerRequest: null })
+      : new IORedis({
+          host: process.env.REDIS_HOST || 'localhost',
+          port: parseInt(process.env.REDIS_PORT || '6379'),
+          password: process.env.REDIS_PASSWORD || undefined,
+          maxRetriesPerRequest: null,
+        })
     const queue = new Queue('audio-generation', { connection: redis as unknown as ConnectionOptions })
 
     await queue.add('generate', {
