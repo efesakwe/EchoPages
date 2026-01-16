@@ -289,118 +289,6 @@ export function AudioPlayer({
     }
   }, [savePlaybackState])
 
-  // Media Session API for background playback and lock screen controls
-  useEffect(() => {
-    if (!('mediaSession' in navigator)) return
-
-    // Set metadata for lock screen / notification center
-    navigator.mediaSession!.metadata = new MediaMetadata({
-      title: chapter.title,
-      artist: book.author || 'Unknown Author',
-      album: book.title,
-      artwork: book.cover_image_url
-        ? [
-            { src: book.cover_image_url, sizes: '96x96', type: 'image/jpeg' },
-            { src: book.cover_image_url, sizes: '128x128', type: 'image/jpeg' },
-            { src: book.cover_image_url, sizes: '192x192', type: 'image/jpeg' },
-            { src: book.cover_image_url, sizes: '256x256', type: 'image/jpeg' },
-            { src: book.cover_image_url, sizes: '384x384', type: 'image/jpeg' },
-            { src: book.cover_image_url, sizes: '512x512', type: 'image/jpeg' },
-          ]
-        : [],
-    })
-  }, [book.title, book.author, book.cover_image_url, chapter.title])
-
-  // Media Session action handlers
-  useEffect(() => {
-    if (!('mediaSession' in navigator)) return
-
-    // Play/Pause handlers
-    navigator.mediaSession!.setActionHandler('play', () => {
-      audioRef.current?.play()
-    })
-    navigator.mediaSession!.setActionHandler('pause', () => {
-      audioRef.current?.pause()
-    })
-
-    // Seek handlers (±30 seconds)
-    navigator.mediaSession!.setActionHandler('seekbackward', () => {
-      handleSkip(-30)
-    })
-    navigator.mediaSession!.setActionHandler('seekforward', () => {
-      handleSkip(30)
-    })
-
-    // Track navigation
-    navigator.mediaSession!.setActionHandler('previoustrack', () => {
-      goToPreviousChunk()
-    })
-    navigator.mediaSession!.setActionHandler('nexttrack', () => {
-      goToNextChunk()
-    })
-
-    return () => {
-      // Clean up handlers
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession!.setActionHandler('play', null)
-        navigator.mediaSession!.setActionHandler('pause', null)
-        navigator.mediaSession!.setActionHandler('seekbackward', null)
-        navigator.mediaSession!.setActionHandler('seekforward', null)
-        navigator.mediaSession!.setActionHandler('previoustrack', null)
-        navigator.mediaSession!.setActionHandler('nexttrack', null)
-      }
-    }
-  }, [handleSkip, goToPreviousChunk, goToNextChunk])
-
-  // Update Media Session playback state
-  useEffect(() => {
-    if (!('mediaSession' in navigator)) return
-    navigator.mediaSession!.playbackState = isPlaying ? 'playing' : 'paused'
-  }, [isPlaying])
-
-  // Update Media Session position state
-  useEffect(() => {
-    if (!('mediaSession' in navigator) || !navigator.mediaSession!.setPositionState) return
-    
-    if (totalChapterDuration > 0) {
-      try {
-        navigator.mediaSession!.setPositionState({
-          duration: totalChapterDuration,
-          playbackRate: playbackRate,
-          position: Math.min(chapterCurrentTime, totalChapterDuration),
-        })
-      } catch (e) {
-        // Some browsers may throw if position > duration
-        console.warn('Media Session position state error:', e)
-      }
-    }
-  }, [chapterCurrentTime, totalChapterDuration, playbackRate])
-
-  // Handle page visibility changes for background playback
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      // When page becomes visible again, sync up the UI state
-      if (document.visibilityState === 'visible' && audioRef.current) {
-        setCurrentTime(audioRef.current.currentTime)
-        setIsPlaying(!audioRef.current.paused)
-      }
-    }
-
-    // Prevent audio from being paused when tab loses focus (some browsers do this)
-    const handleBeforeUnload = () => {
-      // Save state before user leaves
-      savePlaybackState()
-    }
-
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-    window.addEventListener('beforeunload', handleBeforeUnload)
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
-      window.removeEventListener('beforeunload', handleBeforeUnload)
-    }
-  }, [savePlaybackState])
-
   const handlePlayPause = async () => {
     const audio = audioRef.current
     if (!audio || !hasAudio) return
@@ -517,6 +405,117 @@ export function AudioPlayer({
       router.push(`/book/${bookId}/chapter/${nextChapter.id}`)
     }
   }
+
+  // Media Session API for background playback and lock screen controls
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+
+    // Set metadata for lock screen / notification center
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: chapter.title,
+      artist: book.author || 'Unknown Author',
+      album: book.title,
+      artwork: book.cover_image_url
+        ? [
+            { src: book.cover_image_url, sizes: '96x96', type: 'image/jpeg' },
+            { src: book.cover_image_url, sizes: '128x128', type: 'image/jpeg' },
+            { src: book.cover_image_url, sizes: '192x192', type: 'image/jpeg' },
+            { src: book.cover_image_url, sizes: '256x256', type: 'image/jpeg' },
+            { src: book.cover_image_url, sizes: '384x384', type: 'image/jpeg' },
+            { src: book.cover_image_url, sizes: '512x512', type: 'image/jpeg' },
+          ]
+        : [],
+    })
+  }, [book.title, book.author, book.cover_image_url, chapter.title])
+
+  // Media Session action handlers
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+
+    // Play/Pause handlers
+    navigator.mediaSession.setActionHandler('play', () => {
+      audioRef.current?.play()
+    })
+    navigator.mediaSession.setActionHandler('pause', () => {
+      audioRef.current?.pause()
+    })
+
+    // Seek handlers (±30 seconds)
+    navigator.mediaSession.setActionHandler('seekbackward', () => {
+      handleSkip(-30)
+    })
+    navigator.mediaSession.setActionHandler('seekforward', () => {
+      handleSkip(30)
+    })
+
+    // Track navigation
+    navigator.mediaSession.setActionHandler('previoustrack', () => {
+      goToPreviousChunk()
+    })
+    navigator.mediaSession.setActionHandler('nexttrack', () => {
+      goToNextChunk()
+    })
+
+    return () => {
+      // Clean up handlers
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.setActionHandler('play', null)
+        navigator.mediaSession.setActionHandler('pause', null)
+        navigator.mediaSession.setActionHandler('seekbackward', null)
+        navigator.mediaSession.setActionHandler('seekforward', null)
+        navigator.mediaSession.setActionHandler('previoustrack', null)
+        navigator.mediaSession.setActionHandler('nexttrack', null)
+      }
+    }
+  }, [handleSkip, goToPreviousChunk, goToNextChunk])
+
+  // Update Media Session playback state
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused'
+  }, [isPlaying])
+
+  // Update Media Session position state
+  useEffect(() => {
+    if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return
+    
+    if (totalChapterDuration > 0) {
+      try {
+        navigator.mediaSession.setPositionState({
+          duration: totalChapterDuration,
+          playbackRate: playbackRate,
+          position: Math.min(chapterCurrentTime, totalChapterDuration),
+        })
+      } catch (e) {
+        // Some browsers may throw if position > duration
+        console.warn('Media Session position state error:', e)
+      }
+    }
+  }, [chapterCurrentTime, totalChapterDuration, playbackRate])
+
+  // Handle page visibility changes for background playback
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      // When page becomes visible again, sync up the UI state
+      if (document.visibilityState === 'visible' && audioRef.current) {
+        setCurrentTime(audioRef.current.currentTime)
+        setIsPlaying(!audioRef.current.paused)
+      }
+    }
+
+    // Save state before user leaves
+    const handleBeforeUnload = () => {
+      savePlaybackState()
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('beforeunload', handleBeforeUnload)
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, [savePlaybackState])
 
   if (!hasAudio) {
     return (
