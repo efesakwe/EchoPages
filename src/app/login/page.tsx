@@ -1,5 +1,7 @@
 'use client'
 
+export const dynamic = 'force-dynamic'
+
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
@@ -13,7 +15,9 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
   const router = useRouter()
-  const supabase = createClient()
+  
+  // Create client lazily to avoid issues during build
+  const getSupabase = () => createClient()
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -21,6 +25,8 @@ export default function LoginPage() {
     setMessage('')
 
     try {
+      const supabase = getSupabase()
+      
       if (isMagicLink) {
         // Check allowlist first
         const { data: allowlistData, error: allowlistError } = await supabase
@@ -92,6 +98,7 @@ export default function LoginPage() {
 
     try {
       // Check allowlist first
+      const supabase = getSupabase()
       const { data: allowlistData, error: allowlistError } = await supabase
         .from('allowlist_emails')
         .select('email')

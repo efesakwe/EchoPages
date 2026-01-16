@@ -30,3 +30,6 @@ export async function GET(request: Request) {
     )
   }
 }
+
+// Force dynamic rendering
+export const dynamic = 'force-dynamic'

@@ -90,3 +90,6 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }
+
+// Force dynamic rendering
+export const dynamic = 'force-dynamic'
