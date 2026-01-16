@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { Queue, ConnectionOptions } from 'bullmq'
 import Redis from 'ioredis'
 import { NextResponse } from 'next/server'
@@ -29,13 +30,49 @@ function getQueue() {
   return audioQueue
 }
 
+// Helper to get user from either cookie session or Bearer token
+async function getAuthenticatedUser(request: Request) {
+  // First try cookie-based auth (web app)
+  const supabase = createClient()
+  const { data: { user: cookieUser } } = await supabase.auth.getUser()
+  
+  if (cookieUser) {
+    return { user: cookieUser, supabase }
+  }
+  
+  // Try Bearer token auth (mobile app)
+  const authHeader = request.headers.get('Authorization')
+  if (authHeader?.startsWith('Bearer ')) {
+    const token = authHeader.substring(7)
+    
+    // Create a new Supabase client with the token
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    
+    const tokenClient = createSupabaseClient(supabaseUrl, supabaseAnonKey, {
+      global: {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    })
+    
+    const { data: { user: tokenUser } } = await tokenClient.auth.getUser(token)
+    
+    if (tokenUser) {
+      return { user: tokenUser, supabase: tokenClient }
+    }
+  }
+  
+  return { user: null, supabase }
+}
+
 export async function POST(
   request: Request,
   { params }: { params: { chapterId: string } }
 ) {
   try {
-    const supabase = createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const { user, supabase } = await getAuthenticatedUser(request)
 
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
