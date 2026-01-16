@@ -701,17 +701,8 @@ export function AudioPlayer({
         </div>
 
         {/* Chapter indicator */}
-        <div className="mt-6 text-xs text-gray-400 space-y-1">
+        <div className="mt-6 text-xs text-gray-400">
           <div>Chapter {chapter.idx + 1} of {allChapters.length}</div>
-          {primaryProvider && (
-            <div className={`text-xs px-2 py-1 rounded-full inline-block ${
-              primaryProvider === 'openai' 
-                ? 'bg-green-100 text-green-700' 
-                : 'bg-purple-100 text-purple-700'
-            }`}>
-              {primaryProvider === 'openai' ? 'OpenAI TTS' : 'ElevenLabs'}
-            </div>
-          )}
         </div>
       </div>
 

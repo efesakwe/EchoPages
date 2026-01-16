@@ -128,23 +128,6 @@ export default async function ChapterPlayerPage({
         </nav>
 
         <div className="flex flex-col items-center justify-center min-h-[calc(100vh-80px)] px-8">
-          {/* Provider Info Banner - Show if there are completed chunks */}
-          {done > 0 && primaryProvider && (
-            <div className={`mb-4 px-4 py-2 rounded-lg max-w-md ${
-              primaryProvider === 'openai' 
-                ? 'bg-green-50 border border-green-200' 
-                : 'bg-purple-50 border border-purple-200'
-            }`}>
-              <p className="text-sm text-gray-700">
-                <span className="font-semibold">TTS Provider:</span>{' '}
-                <span className={`font-bold ${primaryProvider === 'openai' ? 'text-green-700' : 'text-purple-700'}`}>
-                  {primaryProvider === 'openai' ? 'OpenAI TTS' : 'ElevenLabs'}
-                </span>
-                {' '}({done} chunks generated)
-              </p>
-            </div>
-          )}
-          
           {/* Cover Image */}
           <div className="w-64 h-64 rounded-lg shadow-xl overflow-hidden bg-gray-200 mb-6">
             {book.cover_image_url ? (
@@ -206,19 +189,9 @@ export default async function ChapterPlayerPage({
   // Full player view
   return (
     <div className="relative">
-      {/* Provider Info Banner - Show above player if audio is ready */}
-      {done > 0 && primaryProvider && (
-        <div className={`fixed top-0 left-0 right-0 z-50 px-4 py-2 flex items-center justify-center gap-4 ${
-          primaryProvider === 'openai' 
-            ? 'bg-green-50 border-b border-green-200' 
-            : 'bg-purple-50 border-b border-purple-200'
-        }`}>
-          <p className="text-sm text-gray-700">
-            <span className="font-semibold">TTS Provider:</span>{' '}
-            <span className={`font-bold ${primaryProvider === 'openai' ? 'text-green-700' : 'text-purple-700'}`}>
-              {primaryProvider === 'openai' ? 'OpenAI TTS' : 'ElevenLabs'}
-            </span>
-          </p>
+      {/* Regenerate Button - Show above player if audio is ready */}
+      {done > 0 && (
+        <div className="fixed top-0 left-0 right-0 z-50 px-4 py-2 flex items-center justify-center bg-white border-b border-gray-200">
           <RegenerateAudioButton chapterId={chapterId} />
         </div>
       )}
