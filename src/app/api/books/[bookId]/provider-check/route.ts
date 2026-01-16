@@ -18,17 +18,22 @@ export async function GET(
 
     const { bookId } = params
 
-    // Get all audio chunks for this book
-    const { data: chunks, error } = await supabase
-      .from('audio_chunks')
-      .select('provider, status')
-      .in('chapter_id', 
-        supabase
-          .from('chapters')
-          .select('id')
-          .eq('book_id', bookId)
-      )
-      .eq('status', 'done')
+    // First get chapter IDs for this book
+    const { data: chapters } = await supabase
+      .from('chapters')
+      .select('id')
+      .eq('book_id', bookId)
+
+    const chapterIds = chapters?.map(c => c.id) || []
+
+    // Get all audio chunks for this book's chapters
+    const { data: chunks, error } = chapterIds.length > 0 
+      ? await supabase
+          .from('audio_chunks')
+          .select('provider, status')
+          .in('chapter_id', chapterIds)
+          .eq('status', 'done')
+      : { data: [], error: null }
 
     if (error) {
       return NextResponse.json({ error: 'Failed to fetch chunks' }, { status: 500 })
