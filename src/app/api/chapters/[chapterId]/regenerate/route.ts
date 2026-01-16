@@ -1,5 +1,5 @@
 import { createClient, createServiceClient } from '@/lib/supabase/server'
-import { Queue } from 'bullmq'
+import { Queue, ConnectionOptions } from 'bullmq'
 import IORedis from 'ioredis'
 import { NextResponse } from 'next/server'
 
@@ -72,10 +72,13 @@ export async function POST(
     console.log(`Deleted chunks for chapter ${chapterId}, queueing regeneration...`)
 
     // Re-queue the audio generation job
-    const redis = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379', {
+    const redis = new IORedis({
+      host: process.env.REDIS_HOST || 'localhost',
+      port: parseInt(process.env.REDIS_PORT || '6379'),
+      password: process.env.REDIS_PASSWORD || undefined,
       maxRetriesPerRequest: null,
     })
-    const queue = new Queue('audio-generation', { connection: redis })
+    const queue = new Queue('audio-generation', { connection: redis as unknown as ConnectionOptions })
 
     await queue.add('generate', {
       chapterId,
@@ -96,3 +99,6 @@ export async function POST(
     )
   }
 }
+
+// Force dynamic rendering
+export const dynamic = 'force-dynamic'

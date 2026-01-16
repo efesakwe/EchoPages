@@ -1,18 +1,26 @@
 import { createClient } from '@/lib/supabase/server'
-import { Queue } from 'bullmq'
+import { Queue, ConnectionOptions } from 'bullmq'
 import Redis from 'ioredis'
 import { NextResponse } from 'next/server'
 
-const redis = new Redis({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: parseInt(process.env.REDIS_PORT || '6379'),
-  password: process.env.REDIS_PASSWORD || undefined,
-  maxRetriesPerRequest: null, // Required by BullMQ for blocking operations
-})
+// Lazy-load Redis to avoid build-time connection
+let redis: Redis | null = null
+let audioQueue: Queue | null = null
 
-const audioQueue = new Queue('audio-generation', {
-  connection: redis,
-})
+function getQueue() {
+  if (!audioQueue) {
+    redis = new Redis({
+      host: process.env.REDIS_HOST || 'localhost',
+      port: parseInt(process.env.REDIS_PORT || '6379'),
+      password: process.env.REDIS_PASSWORD || undefined,
+      maxRetriesPerRequest: null,
+    })
+    audioQueue = new Queue('audio-generation', {
+      connection: redis as unknown as ConnectionOptions,
+    })
+  }
+  return audioQueue
+}
 
 export async function POST(
   request: Request,
@@ -59,15 +67,17 @@ export async function POST(
       .select('id')
       .eq('chapter_id', chapterId)
 
+    const queue = getQueue()
+    
     if (existingChunks && existingChunks.length > 0) {
       // Enqueue job to generate missing chunks
-      await audioQueue.add('generate-chunks', {
+      await queue.add('generate-chunks', {
         chapterId,
         userId: user.id,
       })
     } else {
       // First time: need to create chunks from chapter text
-      await audioQueue.add('structure-and-generate', {
+      await queue.add('structure-and-generate', {
         chapterId,
         userId: user.id,
       })
@@ -82,3 +92,6 @@ export async function POST(
     )
   }
 }
+
+// Force dynamic rendering
+export const dynamic = 'force-dynamic'
