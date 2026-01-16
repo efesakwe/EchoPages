@@ -3,37 +3,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 
-// Media Session API types
-declare global {
-  interface Navigator {
-    mediaSession?: MediaSession
-  }
-  interface MediaSession {
-    metadata: MediaMetadata | null
-    playbackState: 'none' | 'paused' | 'playing'
-    setActionHandler(
-      action: 'play' | 'pause' | 'seekbackward' | 'seekforward' | 'previoustrack' | 'nexttrack' | 'stop',
-      handler: (() => void) | null
-    ): void
-    setPositionState?(state: { duration: number; playbackRate: number; position: number }): void
-  }
-  interface MediaMetadata {
-    title: string
-    artist: string
-    album: string
-    artwork: MediaImage[]
-  }
-  interface MediaImage {
-    src: string
-    sizes?: string
-    type?: string
-  }
-  // eslint-disable-next-line no-var
-  var MediaMetadata: {
-    new (init: { title: string; artist: string; album: string; artwork: MediaImage[] }): MediaMetadata
-  }
-}
-
 interface AudioChunk {
   id: string
   idx: number
