@@ -448,7 +448,7 @@ worker.on('failed', (job, err) => {
   console.error(`Job ${job?.id} failed:`, err)
 })
 
-console.log('[WORKER] Audio generation worker started (multi-voice enabled)')
+console.log('[WORKER] Audio generation worker started')
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
