@@ -30,7 +30,7 @@ if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
 
 console.log('✅ Environment variables loaded successfully')
 
-import { Worker } from 'bullmq'
+import { Worker, ConnectionOptions } from 'bullmq'
 import Redis from 'ioredis'
 import { createServiceClient } from './lib/supabase'
 import { structureChapterText, detectCharacters, CharacterInfo } from './lib/llmService'
@@ -369,7 +369,7 @@ const worker = new Worker(
     return { success: true, chapterId, completedChunks: completedCount, totalChunks: finalChunks?.length }
   },
   {
-    connection: redis,
+    connection: redis as unknown as ConnectionOptions,
     concurrency: 1, // Process one chapter at a time
   }
 )
