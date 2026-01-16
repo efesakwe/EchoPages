@@ -98,7 +98,7 @@ export function VoiceSelector({
             ? 'bg-gradient-to-br from-pink-400 to-pink-500'
             : 'bg-gradient-to-br from-blue-400 to-blue-500'
         }`}>
-          {currentVoiceOption.gender === 'female' ? '👩' : '👨'}
+          {currentVoiceOption.gender === 'female' ? 'F' : 'M'}
         </div>
         <div className="flex-1 text-left">
           <div className="font-semibold text-gray-800">{currentVoiceOption.name}</div>
@@ -141,8 +141,8 @@ export function VoiceSelector({
               <h3 className="text-lg font-bold">Choose Narrator Voice</h3>
               <p className="text-sm opacity-90">
                 {currentProvider === 'elevenlabs' 
-                  ? '✨ Premium voices from ElevenLabs' 
-                  : '💰 Regular voices from OpenAI TTS'}
+                  ? 'Premium voices from ElevenLabs' 
+                  : 'Regular voices from OpenAI TTS'}
               </p>
               <div className="mt-2 text-xs opacity-75">
                 {providerVoices.length} voices available
@@ -153,7 +153,7 @@ export function VoiceSelector({
             {hasGeneratedAudio && (
               <div className="bg-amber-50 border-b border-amber-200 px-4 py-3">
                 <p className="text-xs text-amber-800">
-                  ⚠️ <strong>Note:</strong> Changing the voice will only affect NEW audio generation. 
+                  <strong>Note:</strong> Changing the voice will only affect NEW audio generation. 
                   To apply to existing chapters, regenerate their audio.
                 </p>
               </div>
@@ -162,9 +162,9 @@ export function VoiceSelector({
             {/* Filter Tabs */}
             <div className="px-4 py-3 bg-gray-50 border-b flex flex-wrap gap-2">
               {([
-                { key: 'all', label: '🎭 All' },
-                { key: 'female', label: '👩 Female' },
-                { key: 'male', label: '👨 Male' },
+                { key: 'all', label: 'All' },
+                { key: 'female', label: 'Female' },
+                { key: 'male', label: 'Male' },
               ] as const).map(({ key, label }) => (
                 <button
                   key={key}
@@ -206,7 +206,7 @@ export function VoiceSelector({
                         ? 'bg-gradient-to-br from-pink-300 to-pink-400' 
                         : 'bg-gradient-to-br from-blue-300 to-blue-400'
                     }`}>
-                      {voice.gender === 'female' ? '👩' : '👨'}
+                      {voice.gender === 'female' ? 'F' : 'M'}
                     </div>
                     
                     {/* Info */}
@@ -255,7 +255,7 @@ export function VoiceSelector({
             {/* Footer */}
             <div className="sticky bottom-0 bg-gray-50 px-6 py-3 border-t text-center">
               <p className="text-xs text-gray-500">
-                💡 Change Audio Quality above to switch between Regular (OpenAI) and Premium (ElevenLabs) voices.
+                Change Audio Quality above to switch between Regular (OpenAI) and Premium (ElevenLabs) voices.
               </p>
             </div>
           </div>

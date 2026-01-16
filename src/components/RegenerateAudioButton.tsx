@@ -42,7 +42,7 @@ export function RegenerateAudioButton({ chapterId }: RegenerateAudioButtonProps)
       disabled={isLoading}
       className="px-4 py-2 text-sm bg-white border-2 border-lilac-300 text-lilac-600 rounded-lg hover:bg-lilac-50 transition-colors font-medium disabled:opacity-50"
     >
-      {isLoading ? 'Queuing...' : '🔄 Regenerate Audio'}
+      {isLoading ? 'Queuing...' : 'Regenerate Audio'}
     </button>
   )
 }

@@ -133,7 +133,7 @@ export async function structureChapterText(
   // Split text into paragraphs
   const paragraphs = splitIntoParagraphs(text)
   
-  console.log(`\n📝 Structuring ${paragraphs.length} paragraphs (${text.length} chars total)`)
+  console.log(`\n[LLM] Structuring ${paragraphs.length} paragraphs (${text.length} chars total)`)
 
   // Process in batches - but ALWAYS use original text, LLM only for metadata
   const batchSize = 10
@@ -183,7 +183,7 @@ Known characters: ${characterNames.length > 0 ? characterNames.join(', ') : 'Non
       metadata = result.results || result.chunks || result.paragraphs || []
       
     } catch (error) {
-      console.error(`  ⚠️ LLM failed for batch ${batchNum}, using defaults`)
+      console.error(`  [WARN] LLM failed for batch ${batchNum}, using defaults`)
     }
     
     // ALWAYS create chunks from original paragraphs - LLM only provides metadata
@@ -226,13 +226,13 @@ Known characters: ${characterNames.length > 0 ? characterNames.join(', ') : 'Non
   const chunksLength = chunks.reduce((sum, c) => sum + c.cleanedText.length, 0)
   const coverage = (chunksLength / originalLength) * 100
   
-  console.log(`\n✅ Created ${chunks.length} chunks`)
+  console.log(`\n[OK] Created ${chunks.length} chunks`)
   console.log(`   Original: ${originalLength} chars`)
   console.log(`   Chunks:   ${chunksLength} chars`)
   console.log(`   Coverage: ${coverage.toFixed(1)}%`)
   
   if (coverage < 95) {
-    console.warn(`⚠️ WARNING: Only ${coverage.toFixed(1)}% of text was chunked! Some content may be missing.`)
+    console.warn(`[WARN] Only ${coverage.toFixed(1)}% of text was chunked! Some content may be missing.`)
   }
 
   return chunks

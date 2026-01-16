@@ -102,7 +102,7 @@ export function ChapterPreviewButton({ chapterTitle, chapterText }: ChapterPrevi
             {/* Footer */}
             <div className="bg-gray-50 px-6 py-4 flex justify-between items-center border-t">
               <p className="text-xs text-gray-500">
-                ⚠️ If text is cut off or wrong, click "Re-extract Chapters"
+                If text is cut off or wrong, click "Re-extract Chapters"
               </p>
               <button
                 onClick={() => setShowPreview(false)}

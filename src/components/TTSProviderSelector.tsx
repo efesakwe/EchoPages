@@ -25,7 +25,7 @@ const TTS_PROVIDERS = {
     fullName: 'OpenAI TTS',
     description: 'High quality, balanced',
     cost: '~$0.015 per 1K chars',
-    icon: '💰',
+    icon: '',
     color: 'green',
   },
   elevenlabs: {
@@ -34,7 +34,7 @@ const TTS_PROVIDERS = {
     fullName: 'ElevenLabs',
     description: 'Ultra-realistic, emotional',
     cost: '~$0.30 per 1K chars',
-    icon: '✨',
+    icon: '',
     color: 'purple',
   },
 }
@@ -105,13 +105,13 @@ export function TTSProviderSelector({
   return (
     <div className="space-y-3">
       <label className="block text-sm font-semibold text-gray-700">
-        🔊 Audio Quality
+        Audio Quality
       </label>
 
       {/* Warning for existing audio */}
       {hasGeneratedAudio && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">
-          ⚠️ Changing provider only affects <strong>new</strong> audio generation.
+          Changing provider only affects <strong>new</strong> audio generation.
           Existing chapters will keep their current audio.
         </div>
       )}

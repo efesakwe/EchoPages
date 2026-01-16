@@ -147,13 +147,13 @@ export function setNarratorVoice(voiceIdOrName: string): void {
     currentNarratorVoiceId = voiceOption.voiceId
     currentNarratorVoiceName = voiceOption.id
     // DO NOT override provider here - it's set separately via book's tts_provider setting
-    console.log(`🎙️ Narrator voice set to: ${voiceOption.name} (${voiceOption.accent})`)
+    console.log(`[VOICE] Narrator voice set to: ${voiceOption.name} (${voiceOption.accent})`)
     return
   }
   
   // Otherwise assume it's a raw voice ID (fallback for compatibility)
   currentNarratorVoiceId = voiceIdOrName
-  console.log(`🎙️ Narrator voice set to ID: ${voiceIdOrName}`)
+  console.log(`[VOICE] Narrator voice set to ID: ${voiceIdOrName}`)
 }
 
 /**
@@ -161,7 +161,7 @@ export function setNarratorVoice(voiceIdOrName: string): void {
  */
 export function setProvider(provider: TTSProvider): void {
   currentProvider = provider
-  console.log(`🔊 TTS Provider set to: ${TTS_PROVIDERS[provider].name}`)
+  console.log(`[TTS] Provider set to: ${TTS_PROVIDERS[provider].name}`)
 }
 
 /**
@@ -630,7 +630,7 @@ export async function generateAudio(
 ): Promise<Buffer> {
   const provider = options.provider || currentProvider
   
-  console.log(`🔊 generateAudio called with provider: ${provider} (currentProvider: ${currentProvider})`)
+  console.log(`[TTS] generateAudio called with provider: ${provider} (currentProvider: ${currentProvider})`)
 
   // Get appropriate voice based on provider
   let voiceId = options.voiceId

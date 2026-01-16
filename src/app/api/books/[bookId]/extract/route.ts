@@ -108,7 +108,7 @@ export async function POST(
     if (pageTexts) {
       const emptyPages = pageTexts.map((p, i) => p.length < 10 ? i + 1 : null).filter(p => p !== null)
       if (emptyPages.length > 0) {
-        console.warn(`⚠️ Pages with little/no text: ${emptyPages.join(', ')}`)
+        console.warn(`[WARN] Pages with little/no text: ${emptyPages.join(', ')}`)
       }
       
       // Log first few pages content length
@@ -145,7 +145,7 @@ export async function POST(
     console.log(`Chapters total: ${totalChapterChars} chars`)
     console.log(`Coverage: ${coveragePercent.toFixed(1)}%`)
     if (coveragePercent < 90) {
-      console.error(`⚠️ WARNING: Low coverage! Only ${coveragePercent.toFixed(1)}% of text was captured.`)
+      console.error(`[WARN] Low coverage! Only ${coveragePercent.toFixed(1)}% of text was captured.`)
       console.error(`Missing approximately ${text.length - totalChapterChars} characters`)
     }
     console.log(`==============================================\n`)

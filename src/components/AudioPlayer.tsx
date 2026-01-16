@@ -709,7 +709,7 @@ export function AudioPlayer({
                 ? 'bg-green-100 text-green-700' 
                 : 'bg-purple-100 text-purple-700'
             }`}>
-              {primaryProvider === 'openai' ? '💰 OpenAI TTS' : '🎙️ ElevenLabs'}
+              {primaryProvider === 'openai' ? 'OpenAI TTS' : 'ElevenLabs'}
             </div>
           )}
         </div>

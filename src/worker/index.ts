@@ -28,7 +28,7 @@ if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
   process.exit(1)
 }
 
-console.log('✅ Environment variables loaded successfully')
+console.log('[OK] Environment variables loaded successfully')
 
 import { Worker, ConnectionOptions } from 'bullmq'
 import Redis from 'ioredis'
@@ -59,7 +59,7 @@ const worker = new Worker(
     const supabase = createServiceClient()
 
     // First, fetch the chapter
-    console.log(`📖 Fetching chapter ${chapterId}...`)
+    console.log(`[FETCH] Chapter ${chapterId}...`)
     const { data: chapter, error: chapterError } = await supabase
       .from('chapters')
       .select('*')
@@ -67,7 +67,7 @@ const worker = new Worker(
       .single()
 
     if (chapterError) {
-      console.error('❌ Chapter query error:', chapterError)
+      console.error('[ERROR] Chapter query error:', chapterError)
       throw new Error(`Chapter query failed: ${chapterError.message}`)
     }
 
@@ -75,7 +75,7 @@ const worker = new Worker(
       throw new Error(`Chapter not found: ${chapterId}`)
     }
 
-    console.log(`✅ Chapter found: "${chapter.title}" (book_id: ${chapter.book_id})`)
+    console.log(`[OK] Chapter found: "${chapter.title}" (book_id: ${chapter.book_id})`)
 
     // Then, fetch the book info
     const { data: book, error: bookError } = await supabase
@@ -85,11 +85,11 @@ const worker = new Worker(
       .single()
 
     if (bookError) {
-      console.error('❌ Book query error:', bookError)
+      console.error('[ERROR] Book query error:', bookError)
       throw new Error(`Book query failed: ${bookError.message}`)
     }
 
-    console.log(`✅ Book found: "${book?.title}" (tts_provider: ${book?.tts_provider})`)
+    console.log(`[OK] Book found: "${book?.title}" (tts_provider: ${book?.tts_provider})`)
 
     if (!chapter.text_content) {
       throw new Error(`Chapter has no text content: ${chapterId}`)
@@ -103,13 +103,13 @@ const worker = new Worker(
     const provider = bookProvider as 'openai' | 'elevenlabs'
     setProvider(provider)
     
-    const providerLabel = provider === 'openai' ? '💰 Regular (OpenAI TTS)' : '✨ Premium (ElevenLabs)'
-    console.log(`🔊 Using TTS Provider: ${providerLabel}`)
+    const providerLabel = provider === 'openai' ? 'Regular (OpenAI TTS)' : 'Premium (ElevenLabs)'
+    console.log(`[TTS] Using Provider: ${providerLabel}`)
     console.log(`   Cost: ~$${TTS_PROVIDERS[provider].costPer1MChars}/1M chars`)
     
     // Set the narrator voice for this book
     setNarratorVoice(narratorVoice)
-    console.log(`📖 Book narrator voice: ${narratorVoice}`)
+    console.log(`[VOICE] Book narrator voice: ${narratorVoice}`)
 
     // Get or detect characters for this book
     let characters: CharacterInfo[] = []
@@ -230,13 +230,13 @@ const worker = new Worker(
     const chunksTextLength = chunksToProcess.reduce((sum, c) => sum + c.cleanedText.length, 0)
     const coverage = (chunksTextLength / originalTextLength) * 100
     
-    console.log(`\n📊 TEXT VERIFICATION:`)
+    console.log(`\n[VERIFY] TEXT VERIFICATION:`)
     console.log(`   Original chapter: ${originalTextLength} chars`)
     console.log(`   Total in chunks:  ${chunksTextLength} chars`)
     console.log(`   Coverage: ${coverage.toFixed(1)}%`)
     
     if (coverage < 95) {
-      console.warn(`⚠️ WARNING: Only ${coverage.toFixed(1)}% coverage! Some text may not be converted to audio.`)
+      console.warn(`[WARN] Only ${coverage.toFixed(1)}% coverage! Some text may not be converted to audio.`)
     }
 
     console.log(`\nTotal chunks to process: ${chunksToProcess.length}`)
@@ -321,9 +321,9 @@ const worker = new Worker(
           .eq('chapter_id', chapterId)
           .eq('idx', chunk.idx)
 
-        console.log(`✅ Completed chunk ${chunk.idx}/${chunksToProcess.length}`)
+        console.log(`[OK] Completed chunk ${chunk.idx}/${chunksToProcess.length}`)
       } catch (error: any) {
-        console.error(`❌ Error processing chunk ${chunk.idx}:`, error)
+        console.error(`[ERROR] Error processing chunk ${chunk.idx}:`, error)
 
         await supabase
           .from('audio_chunks')
@@ -355,15 +355,15 @@ const worker = new Worker(
     const errorCount = finalChunks?.filter(c => c.status === 'error').length || 0
     const pendingCount = finalChunks?.filter(c => c.status === 'pending' || c.status === 'processing').length || 0
     
-    console.log(`\n📊 FINAL STATUS for chapter ${chapterId}:`)
-    console.log(`   ✅ Completed: ${completedCount}/${finalChunks?.length || 0}`)
-    if (errorCount > 0) console.log(`   ❌ Errors: ${errorCount}`)
+    console.log(`\n[STATUS] FINAL STATUS for chapter ${chapterId}:`)
+    console.log(`   [OK] Completed: ${completedCount}/${finalChunks?.length || 0}`)
+    if (errorCount > 0) console.log(`   [ERROR] Errors: ${errorCount}`)
     if (pendingCount > 0) console.log(`   ⏳ Pending: ${pendingCount}`)
     
     if (completedCount === finalChunks?.length) {
-      console.log(`\n🎉 ALL ${completedCount} chunks completed successfully!`)
+      console.log(`\n[DONE] ALL ${completedCount} chunks completed successfully!`)
     } else {
-      console.warn(`\n⚠️ Not all chunks completed. ${completedCount}/${finalChunks?.length} done.`)
+      console.warn(`\n[WARN] Not all chunks completed. ${completedCount}/${finalChunks?.length} done.`)
     }
     
     return { success: true, chapterId, completedChunks: completedCount, totalChunks: finalChunks?.length }
@@ -425,7 +425,7 @@ worker.on('completed', async (job) => {
       })
       .eq('id', bookId)
     
-    console.log(`📚 Book progress: ${completedChapters}/${allChapters.length} chapters complete`)
+    console.log(`[PROGRESS] Book progress: ${completedChapters}/${allChapters.length} chapters complete`)
     
     // If all chapters are complete, mark the book as public/complete
     if (completedChapters === allChapters.length) {
@@ -437,7 +437,7 @@ worker.on('completed', async (job) => {
         })
         .eq('id', bookId)
       
-      console.log(`🎉 BOOK COMPLETE! "${bookId}" is now available in the shared library!`)
+      console.log(`[COMPLETE] BOOK COMPLETE! "${bookId}" is now available in the shared library!`)
     }
   } catch (error) {
     console.error('Error checking book completion:', error)
@@ -448,7 +448,7 @@ worker.on('failed', (job, err) => {
   console.error(`Job ${job?.id} failed:`, err)
 })
 
-console.log('🎙️ Audio generation worker started (multi-voice enabled)')
+console.log('[WORKER] Audio generation worker started (multi-voice enabled)')
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {

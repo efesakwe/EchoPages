@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 import { AudioPlayer } from '@/components/AudioPlayer'
 import { GenerateAudioButton } from '@/components/GenerateAudioButton'
+import { RegenerateAudioButton } from '@/components/RegenerateAudioButton'
 
 export default async function ChapterPlayerPage({
   params,
@@ -137,7 +138,7 @@ export default async function ChapterPlayerPage({
               <p className="text-sm text-gray-700">
                 <span className="font-semibold">TTS Provider:</span>{' '}
                 <span className={`font-bold ${primaryProvider === 'openai' ? 'text-green-700' : 'text-purple-700'}`}>
-                  {primaryProvider === 'openai' ? '💰 OpenAI TTS' : '🎙️ ElevenLabs'}
+                  {primaryProvider === 'openai' ? 'OpenAI TTS' : 'ElevenLabs'}
                 </span>
                 {' '}({done} chunks generated)
               </p>
@@ -181,6 +182,9 @@ export default async function ChapterPlayerPage({
               <p className="text-xs text-gray-500 text-center">
                 {done} of {total} parts generated
               </p>
+              <div className="mt-4 flex justify-center">
+                <RegenerateAudioButton chapterId={chapterId} />
+              </div>
             </div>
           ) : (
             <div className="text-center">
@@ -204,7 +208,7 @@ export default async function ChapterPlayerPage({
     <div className="relative">
       {/* Provider Info Banner - Show above player if audio is ready */}
       {done > 0 && primaryProvider && (
-        <div className={`fixed top-0 left-0 right-0 z-50 px-4 py-2 text-center ${
+        <div className={`fixed top-0 left-0 right-0 z-50 px-4 py-2 flex items-center justify-center gap-4 ${
           primaryProvider === 'openai' 
             ? 'bg-green-50 border-b border-green-200' 
             : 'bg-purple-50 border-b border-purple-200'
@@ -212,10 +216,10 @@ export default async function ChapterPlayerPage({
           <p className="text-sm text-gray-700">
             <span className="font-semibold">TTS Provider:</span>{' '}
             <span className={`font-bold ${primaryProvider === 'openai' ? 'text-green-700' : 'text-purple-700'}`}>
-              {primaryProvider === 'openai' ? '💰 OpenAI TTS' : '🎙️ ElevenLabs'}
+              {primaryProvider === 'openai' ? 'OpenAI TTS' : 'ElevenLabs'}
             </span>
-            {' '}(Used for this chapter's audio)
           </p>
+          <RegenerateAudioButton chapterId={chapterId} />
         </div>
       )}
       <AudioPlayer
