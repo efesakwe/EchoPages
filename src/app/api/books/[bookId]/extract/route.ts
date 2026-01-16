@@ -1,15 +1,51 @@
 import { createClient, createServiceClient } from '@/lib/supabase/server'
+import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { extractTextFromPDF } from '@/lib/services/pdfService'
 import { detectChapters, saveChapters } from '@/lib/services/chapterService'
 import { NextResponse } from 'next/server'
+
+// Helper to get user from either cookie session or Bearer token
+async function getAuthenticatedUser(request: Request) {
+  // First try cookie-based auth (web app)
+  const supabase = createClient()
+  const { data: { user: cookieUser } } = await supabase.auth.getUser()
+  
+  if (cookieUser) {
+    return { user: cookieUser, supabase }
+  }
+  
+  // Try Bearer token auth (mobile app)
+  const authHeader = request.headers.get('Authorization')
+  if (authHeader?.startsWith('Bearer ')) {
+    const token = authHeader.substring(7)
+    
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    
+    const tokenClient = createSupabaseClient(supabaseUrl, supabaseAnonKey, {
+      global: {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    })
+    
+    const { data: { user: tokenUser } } = await tokenClient.auth.getUser(token)
+    
+    if (tokenUser) {
+      return { user: tokenUser, supabase: tokenClient }
+    }
+  }
+  
+  return { user: null, supabase }
+}
 
 export async function POST(
   request: Request,
   { params }: { params: { bookId: string } }
 ) {
   try {
-    const supabase = createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const { user, supabase } = await getAuthenticatedUser(request)
 
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -153,7 +189,17 @@ export async function POST(
     // Save chapters
     await saveChapters(bookId, chapters)
 
-    // Redirect back to book page
+    // For API calls (mobile), return JSON. For web, redirect.
+    const acceptHeader = request.headers.get('Accept')
+    if (acceptHeader?.includes('application/json') || request.headers.get('Authorization')) {
+      return NextResponse.json({ 
+        success: true, 
+        message: `Successfully extracted ${chapters.length} chapters`,
+        chaptersCount: chapters.length 
+      })
+    }
+
+    // Redirect back to book page (web app)
     return NextResponse.redirect(new URL(`/book/${bookId}`, request.url))
   } catch (error: any) {
     console.error('Extract error:', error)
