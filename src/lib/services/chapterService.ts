@@ -19,7 +19,7 @@ function getOpenAI() {
 }
 
 /**
- * Main: Detect and extract chapters by scanning entire document
+ * Main: Detect and extract chapters using AI
  */
 export async function detectChapters(
   text: string,
@@ -31,29 +31,31 @@ export async function detectChapters(
   
   const lines = text.split('\n')
   
-  // SCAN ENTIRE DOCUMENT for chapter markers
-  console.log('\n--- Scanning entire document for chapter markers ---')
-  const allMarkers = scanEntireDocument(lines)
+  // Use AI to analyze the book and find chapter boundaries
+  console.log('\n--- Using AI to analyze book structure ---')
   
-  if (allMarkers.length >= 2) {
-    console.log(`Found ${allMarkers.length} chapter markers`)
-    const chapters = extractChaptersBetweenMarkers(lines, allMarkers)
+  try {
+    const chapters = await detectChaptersWithAI(text, lines)
     
     if (chapters.length >= 2) {
-      return validateAndReturn(chapters, text)
+      console.log(`\n========== SUCCESS ==========`)
+      console.log(`Extracted ${chapters.length} chapters`)
+      return chapters
     }
+  } catch (error) {
+    console.error('AI detection failed:', error)
   }
   
-  // FALLBACK: AI-based detection
-  console.log('\n--- Fallback: AI-based chapter detection ---')
-  const aiChapters = await detectChaptersWithAI(text, lines)
+  // If AI fails, try simple pattern scan
+  console.log('\n--- Fallback: Pattern scanning ---')
+  const patternChapters = scanWithFlexiblePatterns(lines)
   
-  if (aiChapters.length >= 2) {
-    return validateAndReturn(aiChapters, text)
+  if (patternChapters.length >= 2) {
+    return patternChapters
   }
   
-  // Return full book if nothing works
-  console.log('WARNING: Could not detect chapters, returning full book')
+  // Last resort: return full book
+  console.log('WARNING: Could not detect chapters')
   return [{
     idx: 0,
     title: 'Full Book',
@@ -62,160 +64,181 @@ export async function detectChapters(
 }
 
 /**
- * Scan entire document for chapter markers
- * Returns all markers sorted by their position in the document
+ * Use AI to detect chapters - PRIMARY METHOD
  */
-function scanEntireDocument(lines: string[]): { lineIdx: number; title: string; priority: number }[] {
-  const markers: { lineIdx: number; title: string; priority: number }[] = []
+async function detectChaptersWithAI(text: string, lines: string[]): Promise<Chapter[]> {
+  const openai = getOpenAI()
   
-  // Track which chapter numbers we've seen to avoid duplicates
-  const seenChapterNums = new Set<number>()
-  const seenSpecials = new Set<string>()
+  // Sample more of the book for better analysis
+  const bookLength = text.length
+  const sampleSize = 6000
   
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim()
-    const lineLower = line.toLowerCase()
+  // Get samples from different parts
+  const beginning = text.substring(0, Math.min(sampleSize * 2, bookLength))
+  const middle = text.substring(
+    Math.floor(bookLength * 0.4),
+    Math.floor(bookLength * 0.4) + sampleSize
+  )
+  const later = text.substring(
+    Math.floor(bookLength * 0.7),
+    Math.floor(bookLength * 0.7) + sampleSize
+  )
+  const end = text.substring(Math.max(0, bookLength - sampleSize))
+  
+  const fullSample = `=== BEGINNING OF BOOK ===
+${beginning}
+
+=== MIDDLE OF BOOK ===
+${middle}
+
+=== LATER IN BOOK ===
+${later}
+
+=== END OF BOOK ===
+${end}`
+
+  console.log('Sending book samples to AI for analysis...')
+  
+  const response = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [
+      {
+        role: 'system',
+        content: `You are a book chapter extraction expert. Analyze the book text and identify EVERY chapter/section.
+
+Your task:
+1. Find the Table of Contents if present
+2. Identify the EXACT format used for chapter headings (e.g., "Chapter 1", "CHAPTER ONE", "1", "Part One", etc.)
+3. List ALL chapters/sections in order
+
+Return a JSON object with:
+{
+  "chapterFormat": "describe the exact format used (e.g., 'CHAPTER followed by number word like ONE, TWO')",
+  "chapters": [
+    {"title": "exact chapter heading text", "searchText": "text to search for in document"},
+    ...
+  ]
+}
+
+IMPORTANT:
+- Include special sections: Foreword, Preface, Prologue, Introduction, Epilogue, Afterword, Acknowledgments
+- Include ALL numbered chapters (Chapter 1, Chapter 2, ... Chapter 30+)
+- Use the EXACT text as it appears in the book
+- The "searchText" should be a SHORT unique string that marks the chapter start (just the heading, not content)
+- Look carefully at the beginning for the Table of Contents which lists all chapters`,
+      },
+      {
+        role: 'user',
+        content: `Analyze this book and identify ALL chapters:\n\n${fullSample}`,
+      },
+    ],
+    temperature: 0.1,
+    response_format: { type: 'json_object' },
+    max_tokens: 4000,
+  })
+
+  const result = JSON.parse(response.choices[0]?.message?.content || '{}')
+  
+  console.log(`AI detected format: ${result.chapterFormat}`)
+  console.log(`AI found ${result.chapters?.length || 0} chapters`)
+  
+  if (!result.chapters || result.chapters.length < 2) {
+    console.log('AI found insufficient chapters')
+    return []
+  }
+  
+  // Log all found chapters
+  result.chapters.forEach((ch: {title: string}, i: number) => {
+    console.log(`  ${i + 1}. "${ch.title}"`)
+  })
+  
+  // Now find each chapter in the actual text
+  console.log('\n--- Locating chapters in text ---')
+  
+  const chapters: Chapter[] = []
+  const foundLocations: { lineIdx: number; title: string }[] = []
+  
+  // Find each chapter marker in the text
+  for (const ch of result.chapters) {
+    const searchText = (ch.searchText || ch.title).toLowerCase().trim()
+    const title = ch.title
     
-    // Skip empty or very long lines
-    if (line.length === 0 || line.length > 100) continue
+    // Search for this chapter marker
+    let foundAt = -1
     
-    // Skip if this looks like TOC content (has page numbers at end)
-    if (/[\s.·…_\-]+\d+\s*$/.test(line)) continue
-    
-    // Check context - chapter headers usually have blank lines around them
-    const prevLine = i > 0 ? lines[i - 1].trim() : ''
-    const nextLine = i < lines.length - 1 ? lines[i + 1].trim() : ''
-    const prevEmpty = prevLine.length < 5
-    const nextEmpty = nextLine.length < 5
-    const hasContext = prevEmpty || nextEmpty
-    
-    // PRIORITY 1: Special sections at start (Foreword, Preface, Prologue)
-    if (/^(foreword|preface|prologue|introduction)$/i.test(line)) {
-      const key = lineLower
-      if (!seenSpecials.has(key) && hasContext) {
-        seenSpecials.add(key)
-        markers.push({ lineIdx: i, title: line, priority: 1 })
-        console.log(`  [START] "${line}" at line ${i}`)
-      }
-      continue
-    }
-    
-    // PRIORITY 2: Numbered chapters - "Chapter 1", "Chapter One", "CHAPTER 1"
-    const chapterMatch = line.match(/^chapter\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|twenty[- ]?one|twenty[- ]?two|twenty[- ]?three|twenty[- ]?four|twenty[- ]?five|twenty[- ]?six|twenty[- ]?seven|twenty[- ]?eight|twenty[- ]?nine|thirty|forty|fifty)/i)
-    if (chapterMatch) {
-      const numStr = chapterMatch[1].toLowerCase()
-      const num = isNaN(parseInt(numStr)) ? wordToNum(numStr) : parseInt(numStr)
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim().toLowerCase()
       
-      if (!seenChapterNums.has(num) && hasContext) {
-        seenChapterNums.add(num)
-        markers.push({ lineIdx: i, title: line, priority: 2 })
-        console.log(`  [CHAPTER] "${line}" at line ${i}`)
-      }
-      continue
-    }
-    
-    // PRIORITY 3: Part markers - "Part One", "Part 1"
-    if (/^part\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)/i.test(line) && hasContext) {
-      markers.push({ lineIdx: i, title: line, priority: 3 })
-      console.log(`  [PART] "${line}" at line ${i}`)
-      continue
-    }
-    
-    // PRIORITY 4: Special sections at end (Epilogue, Afterword, Acknowledgments)
-    if (/^(epilogue|afterword|acknowledgments?|about the author|author'?s? note)$/i.test(line)) {
-      const key = lineLower
-      if (!seenSpecials.has(key) && hasContext) {
-        seenSpecials.add(key)
-        markers.push({ lineIdx: i, title: line, priority: 4 })
-        console.log(`  [END] "${line}" at line ${i}`)
-      }
-      continue
-    }
-    
-    // PRIORITY 5: Standalone numbers that might be chapters (e.g., "1" or "1.")
-    // Only if we haven't found Chapter X format
-    if (seenChapterNums.size === 0 && /^\d{1,2}\.?$/.test(line) && hasContext) {
-      const num = parseInt(line)
-      if (num >= 1 && num <= 50 && !seenChapterNums.has(num)) {
-        // Verify next line starts with text (not another number)
-        if (nextLine.length > 20 || /^[A-Z]/.test(nextLine)) {
-          seenChapterNums.add(num)
-          markers.push({ lineIdx: i, title: `Chapter ${num}`, priority: 5 })
-          console.log(`  [NUM] "${line}" -> "Chapter ${num}" at line ${i}`)
+      // Skip empty lines and very long lines
+      if (line.length === 0 || line.length > 100) continue
+      
+      // Skip lines that look like TOC entries (have dots/dashes followed by page numbers)
+      if (/[.·…_\-]{3,}\s*\d+\s*$/.test(lines[i])) continue
+      
+      // Check for match
+      if (line === searchText || 
+          line.startsWith(searchText) || 
+          line.includes(searchText)) {
+        
+        // Make sure we haven't already found this location (avoid TOC)
+        const alreadyFound = foundLocations.some(loc => 
+          Math.abs(loc.lineIdx - i) < 50
+        )
+        
+        if (!alreadyFound) {
+          foundAt = i
+          break
         }
       }
     }
-  }
-  
-  // Sort by line position (order in document)
-  markers.sort((a, b) => a.lineIdx - b.lineIdx)
-  
-  // Filter out markers that are too close together (within 20 lines - probably TOC entries)
-  const filteredMarkers: typeof markers = []
-  for (const marker of markers) {
-    const lastMarker = filteredMarkers[filteredMarkers.length - 1]
-    if (!lastMarker || marker.lineIdx - lastMarker.lineIdx > 30) {
-      filteredMarkers.push(marker)
+    
+    if (foundAt >= 0) {
+      foundLocations.push({ lineIdx: foundAt, title })
+      console.log(`  Found "${title}" at line ${foundAt}`)
     } else {
-      // If markers are close, keep the one with higher priority (lower number)
-      if (marker.priority < lastMarker.priority) {
-        filteredMarkers[filteredMarkers.length - 1] = marker
-      }
+      console.log(`  WARNING: Could not find "${title}"`)
     }
   }
   
-  return filteredMarkers
-}
-
-/**
- * Extract chapter content between markers
- */
-function extractChaptersBetweenMarkers(
-  lines: string[],
-  markers: { lineIdx: number; title: string; priority: number }[]
-): Chapter[] {
-  const chapters: Chapter[] = []
+  // Sort by line index
+  foundLocations.sort((a, b) => a.lineIdx - b.lineIdx)
   
-  console.log('\n--- Extracting chapter content ---')
+  // Remove any that are too close (probably TOC entries caught by mistake)
+  const filteredLocations: typeof foundLocations = []
+  for (const loc of foundLocations) {
+    const last = filteredLocations[filteredLocations.length - 1]
+    if (!last || loc.lineIdx - last.lineIdx > 20) {
+      filteredLocations.push(loc)
+    }
+  }
   
-  for (let i = 0; i < markers.length; i++) {
-    const current = markers[i]
-    const next = markers[i + 1]
+  console.log(`\nLocated ${filteredLocations.length} chapters in text`)
+  
+  // Extract chapter content
+  for (let i = 0; i < filteredLocations.length; i++) {
+    const current = filteredLocations[i]
+    const next = filteredLocations[i + 1]
     
-    // Start from the line AFTER the marker
-    const startLine = current.lineIdx + 1
-    // End at the line BEFORE the next marker (or end of document)
+    const startLine = current.lineIdx + 1 // Start after the heading
     const endLine = next ? next.lineIdx : lines.length
     
-    // Extract content
-    const contentLines = lines.slice(startLine, endLine)
-    let content = contentLines.join('\n').trim()
+    // Get content
+    let content = lines.slice(startLine, endLine).join('\n').trim()
     
-    // Skip first few lines if they're empty or very short (subtitle, etc.)
-    const contentSplit = content.split('\n')
-    let skipLines = 0
-    for (let j = 0; j < Math.min(5, contentSplit.length); j++) {
-      if (contentSplit[j].trim().length < 5) {
-        skipLines++
-      } else {
-        break
-      }
-    }
-    if (skipLines > 0) {
-      content = contentSplit.slice(skipLines).join('\n').trim()
+    // Skip any leading empty lines
+    while (content.startsWith('\n')) {
+      content = content.substring(1)
     }
     
-    const wordCount = content.split(/\s+/).length
+    const wordCount = content.split(/\s+/).filter(w => w.length > 0).length
     
-    if (content.length > 200 && wordCount > 50) {
+    if (wordCount > 30) {
       chapters.push({
         idx: chapters.length,
         title: current.title,
         text: content,
       })
-      console.log(`  ${chapters.length}. "${current.title}" - ${wordCount} words (lines ${startLine}-${endLine})`)
-    } else {
-      console.log(`  SKIPPED "${current.title}" - too short (${wordCount} words)`)
+      console.log(`  Extracted: "${current.title}" (${wordCount} words)`)
     }
   }
   
@@ -223,156 +246,72 @@ function extractChaptersBetweenMarkers(
 }
 
 /**
- * AI-based chapter detection (fallback)
+ * Flexible pattern scanning (fallback)
  */
-async function detectChaptersWithAI(text: string, lines: string[]): Promise<Chapter[]> {
-  try {
-    const openai = getOpenAI()
-    
-    console.log('Using AI to find chapter structure...')
-    
-    // Sample from throughout the book
-    const sampleSize = 4000
-    const samples = [
-      `[BEGINNING]\n${text.substring(0, sampleSize)}`,
-      `[MIDDLE]\n${text.substring(Math.floor(text.length * 0.3), Math.floor(text.length * 0.3) + sampleSize)}`,
-      `[LATER]\n${text.substring(Math.floor(text.length * 0.6), Math.floor(text.length * 0.6) + sampleSize)}`,
-      `[END]\n${text.substring(Math.max(0, text.length - sampleSize))}`,
-    ].join('\n\n')
-    
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'system',
-          content: `You are a book chapter analyzer. Find ALL chapter/section markers in this book.
-
-Look for patterns like:
-- "PROLOGUE", "Prologue"
-- "CHAPTER ONE", "Chapter 1", "CHAPTER 1"
-- "Part One", "PART 1"
-- "EPILOGUE", "Epilogue"
-- Simple numbers like "1" or "1." at the start of lines
-
-Return JSON with the EXACT text of each chapter marker as it appears:
-{
-  "markers": [
-    "PROLOGUE",
-    "CHAPTER ONE", 
-    "CHAPTER TWO",
-    ...
-    "EPILOGUE"
+function scanWithFlexiblePatterns(lines: string[]): Chapter[] {
+  console.log('Scanning with flexible patterns...')
+  
+  const markers: { lineIdx: number; title: string }[] = []
+  
+  // Very flexible patterns
+  const patterns = [
+    /^chapter\s+/i,
+    /^prologue/i,
+    /^epilogue/i,
+    /^foreword/i,
+    /^preface/i,
+    /^introduction/i,
+    /^afterword/i,
+    /^part\s+/i,
+    /^book\s+/i,
+    /^section\s+/i,
+    /^act\s+/i,
   ]
-}
-
-Include ALL chapters you can identify. Use EXACT text as shown in the book.`,
-        },
-        {
-          role: 'user',
-          content: `Find all chapter markers in this book:\n\n${samples}`,
-        },
-      ],
-      temperature: 0.1,
-      response_format: { type: 'json_object' },
-    })
-
-    const result = JSON.parse(response.choices[0]?.message?.content || '{}')
-    const aiMarkers = result.markers || []
+  
+  for (let i = 30; i < lines.length; i++) {
+    const line = lines[i].trim()
     
-    console.log(`AI found ${aiMarkers.length} chapter markers:`, aiMarkers)
+    // Skip empty, very short, or very long lines
+    if (line.length < 3 || line.length > 80) continue
     
-    if (aiMarkers.length < 2) return []
+    // Skip TOC entries
+    if (/[.·…_\-]{3,}\s*\d+\s*$/.test(line)) continue
     
-    // Find these markers in the actual text
-    const foundMarkers: { lineIdx: number; title: string }[] = []
-    let searchFrom = 0
-    
-    for (const markerText of aiMarkers) {
-      const markerLower = markerText.toLowerCase().trim()
-      
-      for (let i = searchFrom; i < lines.length; i++) {
-        const line = lines[i].trim()
-        const lineLower = line.toLowerCase()
-        
-        // Skip TOC entries (have page numbers)
-        if (/[\s.·…_\-]+\d+\s*$/.test(line)) continue
-        
-        // Match the marker
-        if (lineLower === markerLower || lineLower.startsWith(markerLower + ' ') || lineLower.startsWith(markerLower + ':')) {
-          // Check context
-          const prevEmpty = i === 0 || lines[i - 1].trim().length < 5
-          const nextEmpty = i >= lines.length - 1 || lines[i + 1].trim().length < 5
-          
-          if (prevEmpty || nextEmpty || line.length < 50) {
-            foundMarkers.push({ lineIdx: i, title: line })
-            console.log(`  Found "${line}" at line ${i}`)
-            searchFrom = i + 20 // Skip ahead to avoid TOC duplicates
-            break
-          }
+    // Check patterns
+    for (const pattern of patterns) {
+      if (pattern.test(line)) {
+        // Verify it's not too close to previous marker
+        const lastMarker = markers[markers.length - 1]
+        if (!lastMarker || i - lastMarker.lineIdx > 30) {
+          markers.push({ lineIdx: i, title: line })
+          console.log(`  Found: "${line}" at line ${i}`)
         }
+        break
       }
     }
-    
-    if (foundMarkers.length < 2) return []
-    
-    // Extract chapters
-    const chapters: Chapter[] = []
-    for (let i = 0; i < foundMarkers.length; i++) {
-      const start = foundMarkers[i].lineIdx + 1
-      const end = i + 1 < foundMarkers.length ? foundMarkers[i + 1].lineIdx : lines.length
-      
-      const content = lines.slice(start, end).join('\n').trim()
-      const wordCount = content.split(/\s+/).length
-      
-      if (content.length > 200 && wordCount > 50) {
-        chapters.push({
-          idx: chapters.length,
-          title: foundMarkers[i].title,
-          text: content,
-        })
-      }
-    }
-    
-    return chapters
-  } catch (error) {
-    console.error('AI chapter detection failed:', error)
-    return []
   }
-}
-
-/**
- * Validate chapters and return
- */
-function validateAndReturn(chapters: Chapter[], fullText: string): Chapter[] {
-  console.log(`\n========== EXTRACTION COMPLETE ==========`)
-  console.log(`Extracted ${chapters.length} chapters:`)
   
-  let totalChars = 0
-  chapters.forEach((ch, i) => {
-    const wordCount = ch.text.split(/\s+/).length
-    totalChars += ch.text.length
-    console.log(`  ${i + 1}. "${ch.title}" (~${wordCount} words)`)
-  })
+  if (markers.length < 2) return []
   
-  const coverage = (totalChars / fullText.length) * 100
-  console.log(`\nCoverage: ${coverage.toFixed(1)}%`)
+  // Extract chapters
+  const chapters: Chapter[] = []
+  for (let i = 0; i < markers.length; i++) {
+    const start = markers[i].lineIdx + 1
+    const end = i + 1 < markers.length ? markers[i + 1].lineIdx : lines.length
+    
+    const content = lines.slice(start, end).join('\n').trim()
+    const wordCount = content.split(/\s+/).length
+    
+    if (wordCount > 50) {
+      chapters.push({
+        idx: chapters.length,
+        title: markers[i].title,
+        text: content,
+      })
+    }
+  }
   
   return chapters
-}
-
-// Helper: Word to number
-function wordToNum(word: string): number {
-  const normalized = word.toLowerCase().replace(/[- ]/g, '')
-  const words: Record<string, number> = {
-    'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
-    'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
-    'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14, 'fifteen': 15,
-    'sixteen': 16, 'seventeen': 17, 'eighteen': 18, 'nineteen': 19, 'twenty': 20,
-    'twentyone': 21, 'twentytwo': 22, 'twentythree': 23, 'twentyfour': 24, 'twentyfive': 25,
-    'twentysix': 26, 'twentyseven': 27, 'twentyeight': 28, 'twentynine': 29, 'thirty': 30,
-    'forty': 40, 'fifty': 50,
-  }
-  return words[normalized] || 0
 }
 
 export async function saveChapters(bookId: string, chapters: Chapter[]): Promise<void> {
