@@ -167,6 +167,122 @@ function getCoverUrl(imageLinks?: GoogleBooksResult['imageLinks']): string | und
   return url
 }
 
+// Try Open Library for cover image
+async function fetchCoverFromOpenLibrary(title: string, author?: string, isbn?: string): Promise<string | undefined> {
+  try {
+    let searchUrl = ''
+    
+    if (isbn) {
+      // Try ISBN first (most reliable)
+      searchUrl = `https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`
+    } else if (title && author) {
+      // Try title + author
+      const query = encodeURIComponent(`${title} ${author}`)
+      searchUrl = `https://openlibrary.org/search.json?title=${encodeURIComponent(title)}&author=${encodeURIComponent(author)}&limit=1`
+    }
+    
+    if (!searchUrl) return undefined
+    
+    console.log('Searching Open Library for cover:', searchUrl)
+    const response = await fetch(searchUrl)
+    const data = await response.json()
+    
+    // Open Library API format varies
+    if (isbn && data[`ISBN:${isbn}`]?.cover?.large) {
+      return data[`ISBN:${isbn}`].cover.large
+    }
+    if (isbn && data[`ISBN:${isbn}`]?.cover?.medium) {
+      return data[`ISBN:${isbn}`].cover.medium
+    }
+    
+    // For search results
+    if (data.docs && data.docs.length > 0) {
+      const coverId = data.docs[0].cover_i
+      if (coverId) {
+        return `https://covers.openlibrary.org/b/id/${coverId}-L.jpg`
+      }
+    }
+    
+    return undefined
+  } catch (error) {
+    console.error('Open Library cover search error:', error)
+    return undefined
+  }
+}
+
+// Try bookcover.longitood.com API
+async function fetchCoverFromLongitood(title: string, author?: string): Promise<string | undefined> {
+  try {
+    const query = author ? `${title} ${author}` : title
+    const url = `https://bookcover.longitood.com/bookcover?book_title=${encodeURIComponent(query)}`
+    
+    console.log('Searching Longitood for cover:', url)
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      },
+    })
+    
+    if (response.ok) {
+      const data = await response.json()
+      if (data.url || data.imageUrl || data.cover) {
+        return data.url || data.imageUrl || data.cover
+      }
+    }
+    
+    return undefined
+  } catch (error) {
+    console.error('Longitood cover search error:', error)
+    return undefined
+  }
+}
+
+// Try multiple sources for cover image
+async function findBookCover(
+  title: string, 
+  author?: string, 
+  isbn?: string,
+  googleBooksCover?: string
+): Promise<string | undefined> {
+  console.log('=== Searching for book cover across multiple sources ===')
+  
+  // 1. Try Google Books first (most reliable)
+  if (googleBooksCover) {
+    console.log('✅ Found cover from Google Books')
+    return googleBooksCover
+  }
+  
+  console.log('❌ No cover from Google Books, trying other sources...')
+  
+  // 2. Try Open Library
+  const openLibraryCover = await fetchCoverFromOpenLibrary(title, author, isbn)
+  if (openLibraryCover) {
+    console.log('✅ Found cover from Open Library')
+    return openLibraryCover
+  }
+  
+  // 3. Try Longitood
+  const longitoodCover = await fetchCoverFromLongitood(title, author)
+  if (longitoodCover) {
+    console.log('✅ Found cover from Longitood')
+    return longitoodCover
+  }
+  
+  // 4. Try Google Books again with different search (in case we got title/author wrong)
+  if (author) {
+    const retryGoogle = await fetchFromGoogleBooks(title, author)
+    const retryCover = getCoverUrl(retryGoogle?.imageLinks)
+    if (retryCover) {
+      console.log('✅ Found cover from Google Books retry')
+      return retryCover
+    }
+  }
+  
+  console.log('❌ No cover found from any source')
+  return undefined
+}
+
 function getIsbn(identifiers?: Array<{ type: string; identifier: string }>): string | undefined {
   if (!identifiers) return undefined
   const isbn13 = identifiers.find(i => i.type === 'ISBN_13')
@@ -212,10 +328,9 @@ export async function fetchBookMetadata(
 ): Promise<BookMetadata> {
   console.log('=== Starting metadata fetch for:', title, 'by', providedAuthor || 'unknown')
   
-  // First, always try Google Books for cover and basic info
+  // First, try Google Books for basic info and potential cover
   const googleData = await fetchFromGoogleBooks(title, providedAuthor)
-  
-  const coverImageUrl = getCoverUrl(googleData?.imageLinks)
+  const googleBooksCover = getCoverUrl(googleData?.imageLinks)
   const isbn = getIsbn(googleData?.industryIdentifiers)
   
   console.log('Google Books data:', {
@@ -224,13 +339,13 @@ export async function fetchBookMetadata(
     authors: googleData?.authors,
     hasDescription: !!googleData?.description,
     hasImageLinks: !!googleData?.imageLinks,
-    coverImageUrl: coverImageUrl || 'NOT FOUND',
+    hasCover: !!googleBooksCover,
     categories: googleData?.categories,
+    isbn: isbn || 'NOT FOUND',
   })
   
-  if (!coverImageUrl && googleData?.imageLinks) {
-    console.error('⚠️ Image links exist but coverImageUrl is null!', JSON.stringify(googleData.imageLinks, null, 2))
-  }
+  // Search multiple sources for cover image
+  const coverImageUrl = await findBookCover(title, providedAuthor, isbn, googleBooksCover)
   
   // Build base metadata from Google Books
   let metadata: BookMetadata = {
@@ -329,7 +444,7 @@ Return ONLY valid JSON, no markdown code blocks or extra text.`
       summary: result.summary || metadata.summary || googleData?.description || 'No description available.',
       publisher: result.publisher || metadata.publisher || googleData?.publisher,
       category: result.category || metadata.category || googleData?.categories?.[0] || 'Fiction',
-      coverImageUrl: coverImageUrl, // Always use Google Books cover
+      coverImageUrl: coverImageUrl, // Use cover from any source we found
       isbn: metadata.isbn || result.isbn,
       language: result.language || metadata.language || 'English',
       series: result.series || metadata.series,
@@ -349,12 +464,13 @@ Return ONLY valid JSON, no markdown code blocks or extra text.`
     }
   }
   
-  // If still no cover, try one more search with the metadata we have
+  // If still no cover, try one final search with enhanced metadata from OpenAI
   if (!metadata.coverImageUrl && metadata.author && metadata.author !== 'Unknown Author') {
-    console.log('Retrying cover search with author:', metadata.author)
-    const retryData = await fetchFromGoogleBooks(title, metadata.author)
-    if (retryData?.imageLinks) {
-      metadata.coverImageUrl = getCoverUrl(retryData.imageLinks)
+    console.log('Final retry: Searching for cover with enhanced author info:', metadata.author)
+    const finalCover = await findBookCover(title, metadata.author, metadata.isbn)
+    if (finalCover) {
+      metadata.coverImageUrl = finalCover
+      console.log('✅ Found cover in final retry!')
     }
   }
   
