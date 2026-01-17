@@ -155,12 +155,55 @@ function scanForChapterMarkers(lines: string[], startLine: number): { lineIdx: n
         console.log(`  Found: Chapter ${num} (digit) at line ${i}`)
       }
     }
+    
+    // Check for "1. NAME" or "1. CHARACTERNAME" format (numbered POV chapters)
+    // Pattern: number + period + space + word(s)
+    const numberedNameMatch = line.match(/^(\d{1,2})\.\s*([A-Za-z][A-Za-z\s]+)$/i)
+    if (numberedNameMatch) {
+      const num = parseInt(numberedNameMatch[1])
+      const name = numberedNameMatch[2].trim()
+      const nextLine = lines[i + 1]?.trim() || ''
+      const nextNextLine = lines[i + 2]?.trim() || ''
+      
+      // Verify this looks like a chapter marker (followed by content, not more TOC entries)
+      const isInTOC = /^\d{1,2}\.\s*[A-Za-z]/.test(nextLine) // Next line is also "N. Name" format
+      
+      if (!isInTOC) {
+        // Check if content follows
+        const hasContent = nextLine.length > 30 || 
+          (nextLine.length === 0 && nextNextLine.length > 30) ||
+          (nextLine.length < 30 && nextNextLine.length > 30)
+        
+        if (hasContent) {
+          markers.push({ lineIdx: i, title: `${num}. ${name}`, chapterNum: num })
+          console.log(`  Found: ${num}. ${name} (numbered name) at line ${i}`)
+        }
+      }
+    }
+    
+    // Check for just "NAME" in all caps on its own line (POV chapters without numbers)
+    // Only if it's a short line (2-20 chars) and all caps
+    if (/^[A-Z]{2,20}$/.test(line) && !['PROLOGUE', 'EPILOGUE', 'CONTENTS', 'CHAPTER', 'PART', 'THE', 'AND', 'BUT'].includes(line)) {
+      const nextLine = lines[i + 1]?.trim() || ''
+      const nextNextLine = lines[i + 2]?.trim() || ''
+      const prevLine = lines[i - 1]?.trim() || ''
+      
+      // Should be preceded by empty line or short line, followed by content
+      const validContext = (prevLine.length === 0 || prevLine.length < 30) &&
+        (nextLine.length > 40 || (nextLine.length === 0 && nextNextLine.length > 40))
+      
+      if (validContext) {
+        markers.push({ lineIdx: i, title: line, chapterNum: markers.length + 1 })
+        console.log(`  Found: ${line} (character name) at line ${i}`)
+      }
+    }
   }
   
   // Sort by line index to get correct order
   markers.sort((a, b) => a.lineIdx - b.lineIdx)
   
   // Re-assign chapter numbers based on order (Prologue=0, then 1,2,3...)
+  // But preserve original titles for named chapters (like "1. CASEY")
   let chapterCounter = 1
   for (const marker of markers) {
     if (marker.title === 'Prologue') {
@@ -170,8 +213,20 @@ function scanForChapterMarkers(lines: string[], startLine: number): { lineIdx: n
     } else if (marker.title === 'Acknowledgments') {
       marker.chapterNum = 999
     } else {
-      marker.chapterNum = chapterCounter++
-      marker.title = `Chapter ${marker.chapterNum}`
+      // Check if title already has a meaningful name (like "1. CASEY" or just "CASEY")
+      const hasNamedFormat = /^\d+\.\s*[A-Za-z]/.test(marker.title) || /^[A-Z]{2,}$/.test(marker.title)
+      
+      if (hasNamedFormat) {
+        // Preserve the original title but update the chapter number for ordering
+        marker.chapterNum = chapterCounter++
+        // If it's just a name without number, prefix with the number
+        if (/^[A-Z]{2,}$/.test(marker.title)) {
+          marker.title = `${marker.chapterNum}. ${marker.title}`
+        }
+      } else {
+        marker.chapterNum = chapterCounter++
+        marker.title = `Chapter ${marker.chapterNum}`
+      }
     }
   }
   
