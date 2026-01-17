@@ -1,19 +1,50 @@
 import { createClient } from '@/lib/supabase/server'
+import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { uploadPDF } from '@/lib/services/storageService'
 import { fetchBookMetadata } from '@/lib/services/bookMetadataService'
 import { extractTextFromPDF } from '@/lib/services/pdfService'
 import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 
+// Helper to get user from either cookie session or Bearer token
+async function getAuthenticatedUser(request: Request) {
+  // First try cookie-based auth (web app)
+  const supabase = createClient()
+  const { data: { user: cookieUser } } = await supabase.auth.getUser()
+  
+  if (cookieUser) {
+    return { user: cookieUser, supabase }
+  }
+  
+  // Try Bearer token auth (mobile app)
+  const authHeader = request.headers.get('Authorization')
+  if (authHeader?.startsWith('Bearer ')) {
+    const token = authHeader.substring(7)
+    
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    
+    const tokenClient = createSupabaseClient(supabaseUrl, supabaseAnonKey, {
+      global: {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    })
+    
+    const { data: { user: tokenUser } } = await tokenClient.auth.getUser(token)
+    
+    if (tokenUser) {
+      return { user: tokenUser, supabase: tokenClient }
+    }
+  }
+  
+  return { user: null, supabase }
+}
+
 export async function POST(request: Request) {
   try {
-    const supabase = createClient()
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-
-    if (authError) {
-      console.error('Auth error:', authError)
-      return NextResponse.json({ error: 'Authentication failed. Please log in again.' }, { status: 401 })
-    }
+    const { user, supabase } = await getAuthenticatedUser(request)
 
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized. Please log in to upload books.' }, { status: 401 })
