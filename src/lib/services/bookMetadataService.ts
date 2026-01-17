@@ -40,63 +40,131 @@ interface GoogleBooksResult {
 }
 
 async function fetchFromGoogleBooks(title: string, author?: string): Promise<GoogleBooksResult | null> {
-  try {
-    const searchQuery = author 
-      ? `intitle:${title} inauthor:${author}`
-      : title
-    
-    console.log('Google Books search query:', searchQuery)
-    
-    const response = await fetch(
-      `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(searchQuery)}&maxResults=5`
-    )
-    const data = await response.json()
-    
-    console.log('Google Books results:', data.totalItems || 0)
-    
-    if (!data.items || data.items.length === 0) {
-      return null
-    }
-    
-    // Find the best match
-    let bestMatch = data.items[0]
-    
-    if (author) {
-      const authorLower = author.toLowerCase()
-      for (const item of data.items) {
-        const authors = item.volumeInfo?.authors || []
-        if (authors.some((a: string) => a.toLowerCase().includes(authorLower) || authorLower.includes(a.toLowerCase()))) {
-          bestMatch = item
-          break
+  // Try multiple search strategies to find the book
+  const searchQueries: string[] = []
+  
+  if (author && title) {
+    // Strategy 1: Exact title and author match
+    searchQueries.push(`intitle:"${title}" inauthor:"${author}"`)
+    // Strategy 2: Title and author without quotes
+    searchQueries.push(`intitle:${title} inauthor:${author}`)
+    // Strategy 3: Just title and author as keywords
+    searchQueries.push(`${title} ${author}`)
+  }
+  
+  if (title) {
+    // Strategy 4: Just the title
+    searchQueries.push(`intitle:"${title}"`)
+    searchQueries.push(title)
+  }
+  
+  console.log('Trying Google Books searches:', searchQueries)
+  
+  for (const searchQuery of searchQueries) {
+    try {
+      const response = await fetch(
+        `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(searchQuery)}&maxResults=10`
+      )
+      const data = await response.json()
+      
+      console.log(`Search "${searchQuery}" returned ${data.totalItems || 0} results`)
+      
+      if (!data.items || data.items.length === 0) {
+        continue
+      }
+      
+      // Find the best match
+      let bestMatch = data.items[0]
+      let bestScore = 0
+      
+      if (author) {
+        const authorLower = author.toLowerCase().trim()
+        const titleLower = title.toLowerCase().trim()
+        
+        for (const item of data.items) {
+          const itemTitle = (item.volumeInfo?.title || '').toLowerCase()
+          const itemAuthors = (item.volumeInfo?.authors || []).map((a: string) => a.toLowerCase())
+          
+          // Score based on title and author match
+          let score = 0
+          if (itemTitle.includes(titleLower) || titleLower.includes(itemTitle)) {
+            score += 10
+          }
+          if (itemAuthors.some(a => a.includes(authorLower) || authorLower.includes(a))) {
+            score += 10
+          }
+          // Bonus if it has an image
+          if (item.volumeInfo?.imageLinks) {
+            score += 5
+          }
+          
+          if (score > bestScore) {
+            bestMatch = item
+            bestScore = score
+          }
         }
       }
+      
+      // If we found a match with image, return it
+      if (bestMatch?.volumeInfo) {
+        console.log('Found match:', {
+          title: bestMatch.volumeInfo.title,
+          authors: bestMatch.volumeInfo.authors,
+          hasImage: !!bestMatch.volumeInfo.imageLinks,
+        })
+        return bestMatch.volumeInfo
+      }
+    } catch (error) {
+      console.error(`Google Books API error for query "${searchQuery}":`, error)
+      continue
     }
-    
-    return bestMatch.volumeInfo || null
-  } catch (error) {
-    console.error('Google Books API error:', error)
-    return null
   }
+  
+  console.log('No book found in Google Books after trying all queries')
+  return null
 }
 
 function getCoverUrl(imageLinks?: GoogleBooksResult['imageLinks']): string | undefined {
-  if (!imageLinks) return undefined
+  if (!imageLinks) {
+    console.log('No imageLinks provided')
+    return undefined
+  }
+  
+  console.log('Available image links:', Object.keys(imageLinks))
   
   // Prefer higher resolution
-  const url = imageLinks.extraLarge || 
-              imageLinks.large || 
-              imageLinks.medium || 
-              imageLinks.small || 
-              imageLinks.thumbnail ||
-              imageLinks.smallThumbnail
+  let url = imageLinks.extraLarge || 
+            imageLinks.large || 
+            imageLinks.medium || 
+            imageLinks.small || 
+            imageLinks.thumbnail ||
+            imageLinks.smallThumbnail
   
-  if (!url) return undefined
+  if (!url) {
+    console.log('No URL found in imageLinks')
+    return undefined
+  }
   
-  // Convert to HTTPS and improve quality
+  console.log('Original image URL:', url)
+  
+  // Convert to HTTPS
+  url = url.replace('http://', 'https://')
+  
+  // For Google Books images, we can get higher resolution by manipulating the zoom parameter
+  // Remove zoom=1 or zoom=5 and set to zoom=0 for best quality
+  url = url.replace(/&zoom=\d+/, '&zoom=0')
+  
+  // Remove curl edge effect
+  url = url.replace('&edge=curl', '')
+  
+  // If it's a thumbnail, try to get a larger version
+  if (url.includes('zoom=5')) {
+    url = url.replace('zoom=5', 'zoom=0')
+  }
+  
+  console.log('Processed image URL:', url)
+  
   return url
-    .replace('http://', 'https://')
-    .replace('&zoom=1', '&zoom=0')
-    .replace('&edge=curl', '')
 }
 
 function getIsbn(identifiers?: Array<{ type: string; identifier: string }>): string | undefined {
@@ -155,9 +223,14 @@ export async function fetchBookMetadata(
     title: googleData?.title,
     authors: googleData?.authors,
     hasDescription: !!googleData?.description,
-    hasCover: !!coverImageUrl,
+    hasImageLinks: !!googleData?.imageLinks,
+    coverImageUrl: coverImageUrl || 'NOT FOUND',
     categories: googleData?.categories,
   })
+  
+  if (!coverImageUrl && googleData?.imageLinks) {
+    console.error('⚠️ Image links exist but coverImageUrl is null!', JSON.stringify(googleData.imageLinks, null, 2))
+  }
   
   // Build base metadata from Google Books
   let metadata: BookMetadata = {
