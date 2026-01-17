@@ -42,11 +42,15 @@ async function parseTOCWithAI(text: string): Promise<TOCEntry[]> {
           content: `You are a book parsing expert. Extract the complete Table of Contents (TOC) from the text. 
           Identify ALL entries including Prologue, Foreword, Preface, Chapter 1, Chapter 2, Epilogue, etc.
           Return a JSON object with an "entries" array. Each entry should have:
-          - "title": The full title from TOC
+          - "title": The EXACT title as it appears in TOC (e.g., "Chapter 1", "Prologue", "Chapter 2: The Journey Begins")
           - "type": "special" (for Prologue, Foreword, Preface, Epilogue), "chapter" (for numbered chapters), or "part"
           - "chapterNum": The chapter number if it's a chapter (null for special sections)
           
-          Be thorough - extract ALL entries listed in the TOC.`,
+          IMPORTANT: 
+          - Preserve the EXACT title format from TOC
+          - Extract ALL entries in order
+          - Do NOT modify or shorten titles
+          - Include chapter numbers in titles (e.g., "Chapter 1", not just "1")`,
         },
         {
           role: 'user',
@@ -151,12 +155,14 @@ function findChapterLocationsWithPages(
         // Otherwise, content might start a few lines later on same page
         const startPage = isChapterTitlePage ? pageIdx + 1 : pageIdx
         
+        // Use the TOC title, not the found line
         locations.push({
-          title: entry.title,
+          title: entry.title, // Always use TOC title
           pageIdx: startPage,
           lineIdx: matchLine,
           startPage,
         })
+        console.log(`  ✓ Located "${entry.title}" → content starts at page ${startPage + 1}`)
         found = true
         break
       }
@@ -214,38 +220,74 @@ function extractChaptersFromPages(
     const nextLoc = i + 1 < locations.length ? locations[i + 1] : null
     
     // Extract pages for this chapter
-    const startPage = loc.startPage
-    const endPage = nextLoc ? nextLoc.startPage : pageTexts.length
+    const startPage = Math.max(0, loc.startPage)
+    const endPage = nextLoc ? Math.max(startPage + 1, nextLoc.startPage) : pageTexts.length
     
-    // Get all text from startPage to endPage
+    // Ensure we have valid page range
+    if (startPage >= pageTexts.length) {
+      console.warn(`  WARNING: Start page ${startPage + 1} is beyond PDF (${pageTexts.length} pages), skipping`)
+      continue
+    }
+    
+    // Get all text from startPage to endPage (inclusive)
     const chapterPages = pageTexts.slice(startPage, endPage)
-    const chapterText = chapterPages.join('\n\n').trim()
+    let chapterText = chapterPages.join('\n\n').trim()
     
-    // Clean up: remove chapter title if it's at the start
+    // If chapter is too short, it might be a title page - try next page
+    if (chapterText.length < 500 && startPage + 1 < pageTexts.length) {
+      console.log(`  Chapter "${loc.title}" is very short (${chapterText.length} chars), including next page`)
+      chapterText = pageTexts.slice(startPage, Math.min(startPage + 2, pageTexts.length)).join('\n\n').trim()
+    }
+    
+    // Clean up: remove chapter title/header if it's at the start
     let cleanedText = chapterText
     const titleLower = loc.title.toLowerCase()
-    const firstFewLines = cleanedText.substring(0, 200).toLowerCase()
-    if (firstFewLines.includes(titleLower)) {
-      // Remove the title line(s)
+    const firstFewLines = cleanedText.substring(0, 500).toLowerCase()
+    
+    // Remove title and any empty lines at start
+    if (firstFewLines.includes(titleLower) || firstFewLines.length < 100) {
       const lines = cleanedText.split('\n')
       let skipLines = 0
-      for (let j = 0; j < Math.min(5, lines.length); j++) {
-        if (lines[j].toLowerCase().includes(titleLower) || lines[j].trim().length < 5) {
+      
+      // Skip empty lines and title lines
+      for (let j = 0; j < Math.min(10, lines.length); j++) {
+        const lineLower = lines[j].toLowerCase().trim()
+        if (lineLower.length === 0 || 
+            lineLower === titleLower ||
+            lineLower.includes(titleLower) ||
+            lineLower.length < 3) {
           skipLines++
         } else {
+          // Found actual content
           break
         }
       }
-      cleanedText = lines.slice(skipLines).join('\n').trim()
+      
+      if (skipLines > 0 && skipLines < lines.length) {
+        cleanedText = lines.slice(skipLines).join('\n').trim()
+      }
     }
     
-    if (cleanedText.length > 100) {
+    // Validate chapter has substantial content
+    if (cleanedText.length < 100) {
+      console.warn(`  WARNING: Chapter "${loc.title}" has very little content (${cleanedText.length} chars), may be extraction error`)
+      // Try to get more content from surrounding pages
+      if (startPage > 0 && startPage + 2 < pageTexts.length) {
+        cleanedText = pageTexts.slice(Math.max(0, startPage - 1), Math.min(startPage + 3, pageTexts.length)).join('\n\n').trim()
+        console.log(`  Retrying with expanded page range: ${cleanedText.length} chars`)
+      }
+    }
+    
+    if (cleanedText.length > 50) {
       chapters.push({
         idx: i,
-        title: loc.title,
+        title: loc.title, // Use TOC title, not extracted title
         text: cleanedText,
       })
-      console.log(`  Chapter ${i + 1}: "${loc.title}" (pages ${startPage + 1}-${endPage}, ${cleanedText.length} chars)`)
+      const wordCount = cleanedText.split(/\s+/).length
+      console.log(`  ✓ Chapter ${i + 1}: "${loc.title}" (pages ${startPage + 1}-${endPage}, ${cleanedText.length} chars, ~${wordCount} words)`)
+    } else {
+      console.error(`  ✗ Chapter "${loc.title}" has insufficient content (${cleanedText.length} chars), skipping`)
     }
   }
   
@@ -275,6 +317,9 @@ export async function detectChapters(
     tocEntries = parseTOCSimple(lines)
   }
   
+  // Store TOC entries for validation later
+  const allTOCEntries = [...tocEntries]
+  
   if (tocEntries.length === 0) {
     console.warn('No TOC entries found, trying direct chapter scan...')
     return scanForChaptersDirect(lines, pageTexts)
@@ -303,7 +348,7 @@ export async function detectChapters(
   // Step 3: Extract chapters
   let chapters: Chapter[]
   
-  if (pageTexts && pageTexts.length > 0 && locations[0].pageIdx !== undefined) {
+  if (pageTexts && pageTexts.length > 0 && locations[0]?.pageIdx !== undefined) {
     console.log('\n--- Step 3: Extracting chapters from pages ---')
     chapters = extractChaptersFromPages(pageTexts, locations)
   } else {
@@ -311,20 +356,60 @@ export async function detectChapters(
     chapters = extractChaptersFromText(lines, locations)
   }
   
-  // Validation
+  // Validation and cleanup
   if (chapters.length === 0) {
     console.warn('No chapters extracted, using full book')
     return [{ idx: 0, title: 'Full Book', text }]
   }
   
+  // Validate chapters - check for suspicious titles (page numbers)
+  const validatedChapters: Chapter[] = []
+  for (const ch of chapters) {
+    // Check if title looks like a page number (e.g., "15. 14", "41. 40")
+    const pageNumPattern = /^\d+\.\s*\d+$/
+    if (pageNumPattern.test(ch.title.trim())) {
+      console.warn(`  WARNING: Chapter title "${ch.title}" looks like a page number, using TOC entry instead`)
+      // Try to find matching TOC entry
+      const tocMatch = allTOCEntries.find(e => 
+        ch.text.toLowerCase().includes(e.title.toLowerCase()) ||
+        e.title.toLowerCase().includes(ch.title.toLowerCase())
+      )
+      if (tocMatch) {
+        ch.title = tocMatch.title
+        console.log(`  Fixed title to: "${ch.title}"`)
+      } else {
+        ch.title = `Chapter ${ch.idx + 1}`
+        console.log(`  Using default title: "${ch.title}"`)
+      }
+    }
+    
+    // Check for very short chapters (might be extraction error)
+    if (ch.text.length < 200 && validatedChapters.length > 0) {
+      console.warn(`  WARNING: Chapter "${ch.title}" is very short (${ch.text.length} chars), may be incomplete`)
+      // Try to merge with previous chapter if it's suspiciously short
+      if (validatedChapters.length > 0) {
+        const prevChapter = validatedChapters[validatedChapters.length - 1]
+        if (prevChapter.text.length < 50000) { // Only merge if previous isn't huge
+          prevChapter.text += '\n\n' + ch.text
+          prevChapter.title = `${prevChapter.title} (continued)`
+          console.log(`  Merged short chapter into previous chapter`)
+          continue
+        }
+      }
+    }
+    
+    validatedChapters.push(ch)
+  }
+  
   console.log(`\n========== EXTRACTION COMPLETE ==========`)
-  console.log(`Extracted ${chapters.length} chapters:`)
-  chapters.forEach((ch, i) => {
-    console.log(`  ${i + 1}. "${ch.title}" (${ch.text.length} chars)`)
+  console.log(`Extracted ${validatedChapters.length} chapters:`)
+  validatedChapters.forEach((ch, i) => {
+    const wordCount = ch.text.split(/\s+/).length
+    console.log(`  ${i + 1}. "${ch.title}" (${ch.text.length} chars, ~${wordCount} words)`)
   })
   
   // Verify coverage
-  const totalExtracted = chapters.reduce((sum, ch) => sum + ch.text.length, 0)
+  const totalExtracted = validatedChapters.reduce((sum, ch) => sum + ch.text.length, 0)
   const coverage = (totalExtracted / text.length) * 100
   console.log(`Coverage: ${coverage.toFixed(1)}% (${totalExtracted}/${text.length} chars)`)
   
@@ -332,7 +417,7 @@ export async function detectChapters(
     console.warn(`WARNING: Low coverage (${coverage.toFixed(1)}%). Some text may be missing.`)
   }
   
-  return chapters
+  return validatedChapters
 }
 
 /**
