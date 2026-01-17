@@ -6,6 +6,8 @@ import { extractTextFromPDF } from '@/lib/services/pdfService'
 import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 
+export const dynamic = 'force-dynamic'
+
 // Helper to get user from either cookie session or Bearer token
 async function getAuthenticatedUser(request: Request) {
   // First try cookie-based auth (web app)
