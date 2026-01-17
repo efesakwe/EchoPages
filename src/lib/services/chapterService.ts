@@ -9,13 +9,15 @@ const ChapterSchema = z.object({
 
 export type Chapter = z.infer<typeof ChapterSchema>
 
-// Word numbers for matching
+// Number words (with and without hyphens)
 const NUMBER_WORDS = [
   'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
   'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty',
-  'twenty-one', 'twenty-two', 'twenty-three', 'twenty-four', 'twenty-five',
-  'twenty-six', 'twenty-seven', 'twenty-eight', 'twenty-nine', 'thirty',
-  'thirty-one', 'thirty-two', 'thirty-three', 'thirty-four', 'thirty-five'
+  'twentyone', 'twentytwo', 'twentythree', 'twentyfour', 'twentyfive',
+  'twentysix', 'twentyseven', 'twentyeight', 'twentynine', 'thirty',
+  'thirtyone', 'thirtytwo', 'thirtythree', 'thirtyfour', 'thirtyfive',
+  'thirtysix', 'thirtyseven', 'thirtyeight', 'thirtynine', 'forty',
+  'fortyone', 'fortytwo', 'fortythree', 'fortyfour', 'fortyfive'
 ]
 
 /**
@@ -31,9 +33,13 @@ export async function detectChapters(
   const lines = text.split('\n')
   console.log(`Total lines: ${lines.length}`)
   
-  // Scan for ALL possible chapter markers
+  // Find the end of front matter (title pages, TOC, etc.)
+  const contentStart = findContentStart(lines)
+  console.log(`Content starts at line: ${contentStart}`)
+  
+  // Scan for chapter markers
   console.log('\n--- Scanning for chapter markers ---')
-  const markers = scanAllPatterns(lines)
+  const markers = scanForChapterMarkers(lines, contentStart)
   
   if (markers.length >= 2) {
     console.log(`\nFound ${markers.length} chapter markers`)
@@ -54,131 +60,126 @@ export async function detectChapters(
 }
 
 /**
- * Scan for all possible chapter patterns
+ * Find where actual book content starts (skip TOC, title pages, etc.)
  */
-function scanAllPatterns(lines: string[]): { lineIdx: number; title: string; order: number }[] {
-  const markers: { lineIdx: number; title: string; order: number }[] = []
-  
-  // Skip first ~100 lines (front matter, TOC)
-  // But look for actual content markers
-  
-  for (let i = 0; i < lines.length; i++) {
+function findContentStart(lines: string[]): number {
+  // Look for first line of actual prose (long line after short lines)
+  for (let i = 0; i < Math.min(300, lines.length); i++) {
     const line = lines[i].trim()
-    const lineLower = line.toLowerCase()
+    
+    // If we find a long prose line after some short lines, content has started
+    if (line.length > 100) {
+      // Check if previous lines are short (indicates we're past TOC)
+      let shortCount = 0
+      for (let j = Math.max(0, i - 10); j < i; j++) {
+        if (lines[j].trim().length < 50) shortCount++
+      }
+      if (shortCount > 5) {
+        return Math.max(0, i - 5) // Start a few lines before
+      }
+    }
+  }
+  return 50 // Default
+}
+
+/**
+ * Scan for chapter markers
+ */
+function scanForChapterMarkers(lines: string[], startLine: number): { lineIdx: number; title: string; chapterNum: number }[] {
+  const markers: { lineIdx: number; title: string; chapterNum: number }[] = []
+  
+  for (let i = startLine; i < lines.length; i++) {
+    const line = lines[i].trim()
     
     // Skip empty or very long lines
-    if (line.length === 0 || line.length > 80) continue
+    if (line.length === 0 || line.length > 50) continue
     
-    // Check context
-    const prevLine = i > 0 ? lines[i - 1].trim() : ''
-    const nextLine = i < lines.length - 1 ? lines[i + 1].trim() : ''
-    const hasSpaceBefore = prevLine.length === 0 || prevLine.length < 10
+    // Normalize: remove spaces and hyphens, convert to lowercase
+    const normalized = line.replace(/\s+/g, '').replace(/-/g, '').toLowerCase()
     
-    // PATTERN 1: Spaced-out words like "P R O L O G U E"
-    const collapsed = line.replace(/\s+/g, '').toLowerCase()
-    if (collapsed === 'prologue' || collapsed === 'epilogue') {
-      if (hasSpaceBefore) {
-        markers.push({ lineIdx: i, title: collapsed.charAt(0).toUpperCase() + collapsed.slice(1), order: collapsed === 'prologue' ? 0 : 999 })
-        console.log(`  Found spaced: "${line}" -> "${collapsed}" at line ${i}`)
-        continue
-      }
+    // Check for PROLOGUE/EPILOGUE
+    if (normalized === 'prologue') {
+      markers.push({ lineIdx: i, title: 'Prologue', chapterNum: 0 })
+      console.log(`  Found: Prologue at line ${i}`)
+      continue
+    }
+    if (normalized === 'epilogue') {
+      markers.push({ lineIdx: i, title: 'Epilogue', chapterNum: 999 })
+      console.log(`  Found: Epilogue at line ${i}`)
+      continue
+    }
+    if (normalized === 'acknowledgments' || normalized === 'acknowledgements') {
+      markers.push({ lineIdx: i, title: 'Acknowledgments', chapterNum: 1000 })
+      console.log(`  Found: Acknowledgments at line ${i}`)
+      continue
     }
     
-    // PATTERN 2: Word numbers (ONE, TWO, THREE...)
-    const wordIndex = NUMBER_WORDS.findIndex(w => lineLower === w || lineLower === w.replace('-', ' '))
+    // Check for number words
+    const wordIndex = NUMBER_WORDS.indexOf(normalized)
     if (wordIndex >= 0) {
-      // Verify it's likely a chapter marker (has space before, short line)
-      if (hasSpaceBefore && line.length < 20) {
-        const chapterNum = wordIndex + 1
-        markers.push({ lineIdx: i, title: `Chapter ${chapterNum}`, order: chapterNum })
-        console.log(`  Found word number: "${line}" -> Chapter ${chapterNum} at line ${i}`)
-        continue
+      const chapterNum = wordIndex + 1
+      // Verify the next line is actual content (not another chapter marker)
+      const nextLine = lines[i + 1]?.trim() || ''
+      if (nextLine.length > 20 || nextLine.length === 0) {
+        markers.push({ lineIdx: i, title: `Chapter ${chapterNum}`, chapterNum })
+        console.log(`  Found: Chapter ${chapterNum} ("${line}") at line ${i}`)
       }
-    }
-    
-    // PATTERN 3: Regular "Prologue", "Epilogue"
-    if (/^(prologue|epilogue)$/i.test(line) && hasSpaceBefore) {
-      markers.push({ lineIdx: i, title: line, order: lineLower === 'prologue' ? 0 : 999 })
-      console.log(`  Found: "${line}" at line ${i}`)
       continue
     }
     
-    // PATTERN 4: "Chapter 1", "Chapter One"
-    const chapterMatch = line.match(/^chapter\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)/i)
-    if (chapterMatch && hasSpaceBefore) {
-      const numPart = chapterMatch[1].toLowerCase()
-      const chapterNum = NUMBER_WORDS.indexOf(numPart) >= 0 ? NUMBER_WORDS.indexOf(numPart) + 1 : parseInt(numPart)
-      markers.push({ lineIdx: i, title: line, order: chapterNum })
-      console.log(`  Found chapter: "${line}" -> Chapter ${chapterNum} at line ${i}`)
+    // Check for "Chapter X" format
+    const chapterMatch = line.match(/^chapter\s+(\d+)/i)
+    if (chapterMatch) {
+      const chapterNum = parseInt(chapterMatch[1])
+      markers.push({ lineIdx: i, title: line, chapterNum })
+      console.log(`  Found: ${line} at line ${i}`)
       continue
     }
     
-    // PATTERN 5: Digit numbers (1, 2, 3...) alone on a line
-    if (/^\d{1,2}$/.test(line) && hasSpaceBefore) {
+    // Check for standalone digits
+    if (/^\d{1,2}$/.test(line)) {
       const num = parseInt(line)
-      // Verify it's not just a page number - next line should be content or short subtitle
-      if (nextLine.length > 10 || nextLine.length === 0) {
-        markers.push({ lineIdx: i, title: `Chapter ${num}`, order: num })
-        console.log(`  Found digit: "${line}" -> Chapter ${num} at line ${i}`)
-        continue
+      const nextLine = lines[i + 1]?.trim() || ''
+      // Must be followed by content, not another number
+      if (nextLine.length > 20 && !/^\d{1,2}$/.test(nextLine)) {
+        markers.push({ lineIdx: i, title: `Chapter ${num}`, chapterNum: num })
+        console.log(`  Found: Chapter ${num} (digit) at line ${i}`)
       }
     }
-    
-    // PATTERN 6: Other special sections
-    if (/^(foreword|preface|introduction|afterword|acknowledgments?)$/i.test(line) && hasSpaceBefore) {
-      markers.push({ lineIdx: i, title: line, order: lineLower.startsWith('fore') || lineLower.startsWith('pre') || lineLower.startsWith('intro') ? -1 : 1000 })
-      console.log(`  Found special: "${line}" at line ${i}`)
-      continue
-    }
   }
   
-  // Sort by line position
-  markers.sort((a, b) => a.lineIdx - b.lineIdx)
+  // Sort by chapter number, keeping prologue first and epilogue/acknowledgments last
+  markers.sort((a, b) => a.chapterNum - b.chapterNum)
   
-  // Remove markers that are too close together (likely TOC)
-  const filtered: typeof markers = []
-  for (const marker of markers) {
-    const last = filtered[filtered.length - 1]
-    // Must be at least 50 lines apart (actual chapter content)
-    if (!last || marker.lineIdx - last.lineIdx > 50) {
-      filtered.push(marker)
-    }
-  }
-  
-  return filtered
+  return markers
 }
 
 /**
  * Extract chapter content between markers
  */
-function extractChapters(lines: string[], markers: { lineIdx: number; title: string; order: number }[]): Chapter[] {
+function extractChapters(lines: string[], markers: { lineIdx: number; title: string; chapterNum: number }[]): Chapter[] {
   const chapters: Chapter[] = []
   
-  for (let i = 0; i < markers.length; i++) {
-    const current = markers[i]
-    const next = markers[i + 1]
+  // Sort by line index for extraction
+  const sortedMarkers = [...markers].sort((a, b) => a.lineIdx - b.lineIdx)
+  
+  for (let i = 0; i < sortedMarkers.length; i++) {
+    const current = sortedMarkers[i]
+    const next = sortedMarkers[i + 1]
     
-    // Start after the chapter marker (and any subtitle line)
-    let startLine = current.lineIdx + 1
-    
-    // Skip subtitle lines (short lines right after chapter marker)
-    while (startLine < lines.length && lines[startLine].trim().length < 50 && lines[startLine].trim().length > 0) {
-      startLine++
-      if (startLine - current.lineIdx > 3) break // Don't skip more than 3 lines
-    }
-    
+    const startLine = current.lineIdx + 1
     const endLine = next ? next.lineIdx : lines.length
     
-    // Get content, filtering out page markers like "OceanofPDF"
+    // Get content, filter out watermarks
     const contentLines = lines.slice(startLine, endLine).filter(line => {
-      const trimmed = line.trim()
-      return !trimmed.includes('OceanofPDF') && trimmed.length > 0
+      const trimmed = line.trim().toLowerCase()
+      return !trimmed.includes('oceanofpdf') && line.trim().length > 0
     })
     
     const content = contentLines.join('\n').trim()
     const wordCount = content.split(/\s+/).filter(w => w.length > 0).length
     
-    if (wordCount > 100) {
+    if (wordCount > 50) {
       chapters.push({
         idx: chapters.length,
         title: current.title,
@@ -187,7 +188,15 @@ function extractChapters(lines: string[], markers: { lineIdx: number; title: str
     }
   }
   
-  return chapters
+  // Re-sort chapters by their intended order (prologue first, then numbered, then epilogue)
+  chapters.sort((a, b) => {
+    const orderA = markers.find(m => m.title === a.title)?.chapterNum ?? 500
+    const orderB = markers.find(m => m.title === b.title)?.chapterNum ?? 500
+    return orderA - orderB
+  })
+  
+  // Re-index
+  return chapters.map((ch, idx) => ({ ...ch, idx }))
 }
 
 /**
