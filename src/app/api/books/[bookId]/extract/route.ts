@@ -158,8 +158,8 @@ export async function POST(
     console.log(text.substring(0, 1000))
     console.log(`\n============================================`)
 
-    // Detect chapters
-    const chapters = await detectChapters(text)
+    // Detect chapters with page-based extraction
+    const chapters = await detectChapters(text, pageTexts)
 
     if (chapters.length === 0) {
       throw new Error('No chapters could be detected from the PDF')
