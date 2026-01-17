@@ -27,24 +27,22 @@ export async function detectChapters(
 ): Promise<Chapter[]> {
   console.log(`\n========== CHAPTER DETECTION ==========`)
   console.log(`Total characters: ${text.length}`)
-  console.log(`Total words: ~${text.split(/\s+/).length}`)
   
   const lines = text.split('\n')
+  console.log(`Total lines: ${lines.length}`)
   
-  // STEP 1: Use AI to understand the chapter format
-  console.log('\n--- Step 1: AI analyzing chapter format ---')
-  const chapterFormat = await analyzeChapterFormat(text)
-  console.log(`Detected format: ${chapterFormat}`)
+  // STEP 1: Find where the TOC ends (skip past it)
+  const tocEndLine = findTOCEnd(lines)
+  console.log(`TOC ends at line: ${tocEndLine}`)
   
-  // STEP 2: Scan for chapter markers based on detected format
-  console.log('\n--- Step 2: Scanning for chapter markers ---')
-  const markers = scanForMarkers(lines, chapterFormat)
+  // STEP 2: Scan for chapter markers AFTER the TOC
+  console.log('\n--- Scanning for chapter markers after TOC ---')
+  const markers = scanForChapterMarkers(lines, tocEndLine)
   
   if (markers.length >= 2) {
     console.log(`Found ${markers.length} chapter markers`)
     
     // STEP 3: Extract chapter content
-    console.log('\n--- Step 3: Extracting chapter content ---')
     const chapters = extractChapters(lines, markers)
     
     if (chapters.length >= 2) {
@@ -53,7 +51,6 @@ export async function detectChapters(
     }
   }
   
-  // Fallback
   console.log('WARNING: Could not detect chapters, returning full book')
   return [{
     idx: 0,
@@ -63,172 +60,111 @@ export async function detectChapters(
 }
 
 /**
- * Use AI to determine the chapter format used in the book
+ * Find where the Table of Contents ends
  */
-async function analyzeChapterFormat(text: string): Promise<string> {
-  try {
-    const openai = getOpenAI()
-    
-    // Sample the beginning and middle
-    const sample = text.substring(0, 10000) + '\n\n...\n\n' + text.substring(Math.floor(text.length / 2), Math.floor(text.length / 2) + 5000)
-    
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'system',
-          content: `Analyze this book and determine EXACTLY how chapters are marked.
-
-Common formats:
-- "numbered" = Just numbers: 1, 2, 3, 4...
-- "chapter_number" = Chapter 1, Chapter 2...
-- "chapter_word" = Chapter One, Chapter Two...
-- "part" = Part 1, Part 2...
-- "roman" = I, II, III, IV...
-- "titled" = Chapters have titles only (no numbers)
-
-Return JSON:
-{
-  "format": "one of the above formats",
-  "hasSpecialSections": true/false,
-  "specialSections": ["Prologue", "Epilogue", etc if present],
-  "estimatedChapterCount": number
-}`,
-        },
-        {
-          role: 'user',
-          content: `What chapter format does this book use?\n\n${sample}`,
-        },
-      ],
-      temperature: 0.1,
-      response_format: { type: 'json_object' },
-    })
-
-    const result = JSON.parse(response.choices[0]?.message?.content || '{}')
-    console.log('AI analysis:', result)
-    return result.format || 'chapter_number'
-  } catch (error) {
-    console.error('AI format analysis failed:', error)
-    return 'chapter_number'
+function findTOCEnd(lines: string[]): number {
+  let tocStart = -1
+  
+  // Find "CONTENTS" or "TABLE OF CONTENTS"
+  for (let i = 0; i < Math.min(200, lines.length); i++) {
+    const line = lines[i].trim().toLowerCase()
+    if (line === 'contents' || line === 'table of contents') {
+      tocStart = i
+      break
+    }
   }
+  
+  if (tocStart === -1) {
+    // No TOC found, start from beginning but skip first 50 lines (title pages, etc)
+    return 50
+  }
+  
+  // Find where TOC ends - look for first long paragraph after TOC
+  // TOC entries are short, actual content is longer
+  for (let i = tocStart + 1; i < Math.min(tocStart + 200, lines.length); i++) {
+    const line = lines[i].trim()
+    
+    // Skip empty lines
+    if (line.length === 0) continue
+    
+    // If we find a line that's clearly content (long prose), TOC has ended
+    if (line.length > 100 && !line.match(/^[\d\s.·…_\-]+$/)) {
+      console.log(`TOC ends before line ${i}: "${line.substring(0, 50)}..."`)
+      return i
+    }
+  }
+  
+  // Default: skip 150 lines after TOC start
+  return tocStart + 100
 }
 
 /**
- * Scan for chapter markers based on the detected format
+ * Scan for chapter markers after the TOC
  */
-function scanForMarkers(lines: string[], format: string): { lineIdx: number; title: string }[] {
+function scanForChapterMarkers(lines: string[], startLine: number): { lineIdx: number; title: string }[] {
   const markers: { lineIdx: number; title: string }[] = []
   
-  // Track numbers we've seen to ensure sequential chapters
-  let expectedNumber = 1
-  let foundFirstNumber = false
+  // Track chapter numbers to ensure they're sequential
+  let lastChapterNum = 0
   
-  for (let i = 0; i < lines.length; i++) {
+  for (let i = startLine; i < lines.length; i++) {
     const line = lines[i].trim()
     const lineLower = line.toLowerCase()
     
-    // Skip empty or long lines
-    if (line.length === 0 || line.length > 80) continue
+    // Skip empty lines
+    if (line.length === 0) continue
     
-    // Skip TOC entries (dots followed by page numbers)
-    if (/[.·…_\-]{3,}\s*\d+\s*$/.test(line)) continue
+    // Skip very long lines (these are content, not headers)
+    if (line.length > 60) continue
     
-    // Check for special sections (these work for all formats)
+    // Check context - chapter headers usually have space before them
+    const prevLine = i > 0 ? lines[i - 1].trim() : ''
+    const prevPrevLine = i > 1 ? lines[i - 2].trim() : ''
+    const hasSpaceBefore = prevLine.length === 0 || prevLine.length < 5
+    
+    // SPECIAL SECTIONS: Prologue, Epilogue, etc.
     if (/^(prologue|epilogue|foreword|preface|introduction|afterword|acknowledgments?)$/i.test(line)) {
-      // Verify context - should have blank lines around it
-      const prevEmpty = i === 0 || lines[i - 1].trim().length < 3
-      const nextLine = i < lines.length - 1 ? lines[i + 1].trim() : ''
-      
-      if (prevEmpty && !markers.some(m => m.title.toLowerCase() === lineLower)) {
+      if (hasSpaceBefore) {
         markers.push({ lineIdx: i, title: line })
-        console.log(`  Found special: "${line}" at line ${i}`)
+        console.log(`  Found: "${line}" at line ${i}`)
       }
       continue
     }
     
-    // Check based on format
-    let isChapterMarker = false
-    let chapterTitle = ''
+    // CHAPTER formats
     
-    if (format === 'numbered') {
-      // Just numbers: 1, 2, 3 (alone on a line)
-      const numMatch = line.match(/^(\d{1,2})$/)
-      if (numMatch) {
-        const num = parseInt(numMatch[1])
-        
-        // Check context - must have blank line before
-        const prevLine = i > 0 ? lines[i - 1].trim() : ''
-        const prevEmpty = prevLine.length === 0
-        
-        // Sequential or first number
-        if (prevEmpty && (num === expectedNumber || (!foundFirstNumber && num === 1))) {
-          isChapterMarker = true
-          chapterTitle = `Chapter ${num}`
-          expectedNumber = num + 1
-          foundFirstNumber = true
-        }
-      }
-    } else if (format === 'chapter_number') {
-      // "Chapter 1", "Chapter 2", etc.
-      const match = line.match(/^chapter\s+(\d+)/i)
-      if (match) {
-        const prevEmpty = i === 0 || lines[i - 1].trim().length < 3
-        if (prevEmpty) {
-          isChapterMarker = true
-          chapterTitle = line
-        }
-      }
-    } else if (format === 'chapter_word') {
-      // "Chapter One", "Chapter Two", etc.
-      const match = line.match(/^chapter\s+(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)/i)
-      if (match) {
-        const prevEmpty = i === 0 || lines[i - 1].trim().length < 3
-        if (prevEmpty) {
-          isChapterMarker = true
-          chapterTitle = line
-        }
-      }
-    } else if (format === 'part') {
-      // "Part 1", "Part One", etc.
-      const match = line.match(/^part\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)/i)
-      if (match) {
-        const prevEmpty = i === 0 || lines[i - 1].trim().length < 3
-        if (prevEmpty) {
-          isChapterMarker = true
-          chapterTitle = line
-        }
-      }
-    } else if (format === 'roman') {
-      // I, II, III, IV, etc.
-      const match = line.match(/^(I{1,3}|IV|V|VI{1,3}|IX|X|XI{1,3}|XIV|XV|XVI{1,3}|XIX|XX)$/i)
-      if (match) {
-        const prevEmpty = i === 0 || lines[i - 1].trim().length < 3
-        if (prevEmpty) {
-          isChapterMarker = true
-          chapterTitle = `Chapter ${line}`
-        }
-      }
+    // "Chapter 1", "Chapter One", etc.
+    const chapterMatch = line.match(/^chapter\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)/i)
+    if (chapterMatch && hasSpaceBefore) {
+      markers.push({ lineIdx: i, title: line })
+      console.log(`  Found: "${line}" at line ${i}`)
+      continue
     }
     
-    // Also check for generic chapter patterns as fallback
-    if (!isChapterMarker) {
-      const genericMatch = line.match(/^chapter\s+(\d+|[a-z]+)/i)
-      if (genericMatch && line.length < 50) {
-        const prevEmpty = i === 0 || lines[i - 1].trim().length < 3
-        if (prevEmpty) {
-          isChapterMarker = true
-          chapterTitle = line
+    // Just a number (1, 2, 3...) - common format
+    // Must be preceded by empty line and be sequential
+    if (/^\d{1,2}$/.test(line)) {
+      const num = parseInt(line)
+      
+      // Check if it's the expected next chapter number
+      if (hasSpaceBefore && (num === 1 || num === lastChapterNum + 1)) {
+        // Additional check: the line AFTER should be actual content (not another number)
+        const nextLine = i + 1 < lines.length ? lines[i + 1].trim() : ''
+        const nextNextLine = i + 2 < lines.length ? lines[i + 2].trim() : ''
+        
+        // Next line should either be empty or start with content
+        const looksLikeChapterStart = 
+          nextLine.length === 0 || // Empty line after chapter number
+          (nextLine.length > 20 && !/^\d{1,2}$/.test(nextLine)) || // Content
+          (nextLine.length < 5 && nextNextLine.length > 20) // Short line then content
+        
+        if (looksLikeChapterStart) {
+          markers.push({ lineIdx: i, title: `Chapter ${num}` })
+          console.log(`  Found: "${num}" -> "Chapter ${num}" at line ${i}`)
+          lastChapterNum = num
         }
       }
-    }
-    
-    if (isChapterMarker) {
-      // Make sure this isn't too close to previous marker (skip TOC)
-      const lastMarker = markers[markers.length - 1]
-      if (!lastMarker || i - lastMarker.lineIdx > 20) {
-        markers.push({ lineIdx: i, title: chapterTitle })
-        console.log(`  Found chapter: "${chapterTitle}" at line ${i}`)
-      }
+      continue
     }
   }
   
@@ -241,18 +177,13 @@ function scanForMarkers(lines: string[], format: string): { lineIdx: number; tit
 function extractChapters(lines: string[], markers: { lineIdx: number; title: string }[]): Chapter[] {
   const chapters: Chapter[] = []
   
-  // Sort markers by line index
-  markers.sort((a, b) => a.lineIdx - b.lineIdx)
-  
   for (let i = 0; i < markers.length; i++) {
     const current = markers[i]
     const next = markers[i + 1]
     
-    // Start after the chapter marker line
     const startLine = current.lineIdx + 1
     const endLine = next ? next.lineIdx : lines.length
     
-    // Get content
     const content = lines.slice(startLine, endLine).join('\n').trim()
     const wordCount = content.split(/\s+/).filter(w => w.length > 0).length
     
