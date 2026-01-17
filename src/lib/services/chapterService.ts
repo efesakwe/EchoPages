@@ -432,12 +432,57 @@ function extractChapters(lines: string[], markers: { lineIdx: number; title: str
     const next = markers[i + 1]
     
     const startLine = current.lineIdx + 1
-    const endLine = next ? next.lineIdx : lines.length
+    let endLine = next ? next.lineIdx : lines.length
     
-    // Check for suspiciously large chapters
+    // Check for suspiciously large chapters BEFORE extraction
     const lineRange = endLine - startLine
     const avgWordsPerLine = 50 // Rough estimate
     const estimatedWords = lineRange * avgWordsPerLine
+    
+    // If estimated size exceeds 10k words, search for missing markers first
+    if (estimatedWords > 10000 && !next) {
+      // This is likely the last chapter, search for missing markers
+      console.warn(`    WARNING: Chapter "${current.title}" estimated to be very large (${estimatedWords} words). Searching for missing markers...`)
+      
+      const maxSearchLines = Math.min(lines.length, startLine + 500) // Search up to 500 lines ahead
+      for (let searchLine = startLine + 50; searchLine < maxSearchLines; searchLine++) {
+        const line = lines[searchLine]?.trim() || ''
+        
+        // Check for numbered name pattern: "N. NAME"
+        const numberedNameMatch = line.match(/^(\d{1,2})\.\s*([A-Za-z][A-Za-z\s]+)$/i)
+        if (numberedNameMatch) {
+          const num = parseInt(numberedNameMatch[1])
+          const name = numberedNameMatch[2].trim()
+          const nextLine = lines[searchLine + 1]?.trim() || ''
+          const nextNextLine = lines[searchLine + 2]?.trim() || ''
+          
+          const hasContent = nextLine.length > 30 || 
+            (nextLine.length === 0 && nextNextLine.length > 30)
+          
+          if (hasContent) {
+            endLine = searchLine
+            console.warn(`    Found missing chapter marker at line ${searchLine}: "${num}. ${name}" - truncating at this point`)
+            break
+          }
+        }
+        
+        // Also check for standalone character names
+        if (/^[A-Z]{2,20}$/.test(line) && !['PROLOGUE', 'EPILOGUE', 'CONTENTS', 'CHAPTER', 'PART'].includes(line)) {
+          const prevLine = lines[searchLine - 1]?.trim() || ''
+          const nextLine = lines[searchLine + 1]?.trim() || ''
+          const nextNextLine = lines[searchLine + 2]?.trim() || ''
+          
+          const validContext = (prevLine.length === 0 || prevLine.length < 30) &&
+            (nextLine.length > 40 || (nextLine.length === 0 && nextNextLine.length > 40))
+          
+          if (validContext) {
+            endLine = searchLine
+            console.warn(`    Found missing chapter marker at line ${searchLine}: "${line}" - truncating at this point`)
+            break
+          }
+        }
+      }
+    }
     
     // Get content, filter out watermarks
     const contentLines = lines.slice(startLine, endLine).filter(line => {
@@ -445,24 +490,50 @@ function extractChapters(lines: string[], markers: { lineIdx: number; title: str
       return !trimmed.includes('oceanofpdf') && line.trim().length > 0
     })
     
-    const content = contentLines.join('\n').trim()
-    const wordCount = content.split(/\s+/).filter(w => w.length > 0).length
+    let content = contentLines.join('\n').trim()
+    let wordCount = content.split(/\s+/).filter(w => w.length > 0).length
     
     // Log chapter extraction details
     console.log(`  Chapter ${i + 1} "${current.title}":`)
     console.log(`    Lines: ${startLine}-${endLine} (${lineRange} lines)`)
     console.log(`    Words: ${wordCount}`)
     
-    if (wordCount > 10000) {
-      console.warn(`    WARNING: Chapter "${current.title}" is very large (${wordCount} words). This might indicate a missing chapter marker.`)
+    // If chapter still exceeds 10k words after early marker detection, truncate at word boundary
+    if (wordCount >= 10000) {
+      console.warn(`    WARNING: Chapter "${current.title}" still exceeds 10k words (${wordCount} words) after marker search. Truncating...`)
+      
+      // Estimate characters per word (roughly 5-6 chars per word)
+      const avgCharsPerWord = 5.5
+      const maxChars = 9500 * avgCharsPerWord // Target ~9.5k words to be safe
+      const truncatedContent = content.substring(0, maxChars)
+      
+      // Try to cut at a sentence or paragraph boundary for clean truncation
+      const lastPeriod = truncatedContent.lastIndexOf('.')
+      const lastNewline = truncatedContent.lastIndexOf('\n\n')
+      const lastSingleNewline = truncatedContent.lastIndexOf('\n')
+      
+      // Prefer paragraph break, then sentence, then line break
+      let cutPoint = Math.max(lastNewline, lastPeriod, lastSingleNewline)
+      
+      // Ensure we're cutting at a reasonable point (at least 90% of target)
+      if (cutPoint < maxChars * 0.9) {
+        cutPoint = Math.floor(maxChars * 0.95) // Use 95% as fallback
+      }
+      
+      content = truncatedContent.substring(0, cutPoint + 1).trim()
+      wordCount = content.split(/\s+/).filter(w => w.length > 0).length
+      console.warn(`    Truncated chapter to ${wordCount} words (cut at character ${cutPoint})`)
     }
     
-    if (wordCount > 50) {
+    // Enforce strict 10k word limit (no chapter should have more than 10k words)
+    if (wordCount > 50 && wordCount < 10000) {
       chapters.push({
         idx: chapters.length,
         title: current.title,
         text: content,
       })
+    } else if (wordCount >= 10000) {
+      console.error(`    ERROR: Chapter "${current.title}" exceeds 10k word limit (${wordCount} words). Skipping to prevent oversized chapters.`)
     } else {
       console.warn(`    WARNING: Chapter "${current.title}" is too short (${wordCount} words), skipping.`)
     }
