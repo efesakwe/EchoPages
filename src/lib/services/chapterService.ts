@@ -34,12 +34,25 @@ export async function detectChapters(
   const lines = text.split('\n')
   console.log(`Total lines: ${lines.length}`)
   
-  // Find the end of front matter (title pages, TOC, etc.)
+  // Strategy 1: Try to find TOC and extract chapter names from it
+  const tocEntries = findTOC(lines)
+  if (tocEntries.length > 0) {
+    console.log(`\nFound TOC with ${tocEntries.length} entries`)
+    const markersFromTOC = findMarkersFromTOC(lines, tocEntries)
+    if (markersFromTOC.length >= 2) {
+      console.log(`\nFound ${markersFromTOC.length} chapter markers from TOC`)
+      const chapters = extractChapters(lines, markersFromTOC)
+      if (chapters.length >= 2) {
+        logResults(chapters, text)
+        return chapters
+      }
+    }
+  }
+  
+  // Strategy 2: Scan entire document for chapter markers
+  console.log('\n--- Scanning entire document for chapter markers ---')
   const contentStart = findContentStart(lines)
   console.log(`Content starts at line: ${contentStart}`)
-  
-  // Scan for chapter markers
-  console.log('\n--- Scanning for chapter markers ---')
   const markers = scanForChapterMarkers(lines, contentStart)
   
   if (markers.length >= 2) {
@@ -58,6 +71,121 @@ export async function detectChapters(
     title: 'Full Book',
     text: text,
   }]
+}
+
+/**
+ * Find TOC and extract chapter entries
+ */
+function findTOC(lines: string[]): Array<{ number: number; name: string; title: string }> {
+  const entries: Array<{ number: number; name: string; title: string }> = []
+  let tocStart = -1
+  let tocEnd = -1
+  
+  // Find TOC section
+  for (let i = 0; i < Math.min(500, lines.length); i++) {
+    const line = lines[i].trim().toLowerCase()
+    if (line.includes('contents') || line.includes('table of contents')) {
+      tocStart = i
+      break
+    }
+  }
+  
+  if (tocStart === -1) return entries
+  
+  // Find where TOC ends (first long prose line)
+  for (let i = tocStart + 1; i < Math.min(tocStart + 100, lines.length); i++) {
+    const line = lines[i].trim()
+    // TOC entries are typically short, prose is long
+    if (line.length > 100 && !/^\d+\./.test(line)) {
+      tocEnd = i
+      break
+    }
+  }
+  
+  if (tocEnd === -1) tocEnd = Math.min(tocStart + 100, lines.length)
+  
+  // Extract entries from TOC
+  for (let i = tocStart + 1; i < tocEnd; i++) {
+    const line = lines[i].trim()
+    
+    // Pattern: "1. CASEY" or "1.  CASEY" or "1.CASEY" (number + period + optional space(s) + name)
+    // Name can be uppercase letters with optional spaces
+    const match = line.match(/^(\d{1,2})\.\s*([A-Z][A-Z\s]{1,30})$/i)
+    if (match) {
+      const number = parseInt(match[1])
+      const name = match[2].trim().toUpperCase() // Normalize to uppercase
+      entries.push({ number, name, title: `${number}. ${name}` })
+      console.log(`  TOC Entry: ${number}. ${name}`)
+    }
+  }
+  
+  return entries
+}
+
+/**
+ * Find chapter markers in the text based on TOC entries
+ */
+function findMarkersFromTOC(lines: string[], tocEntries: Array<{ number: number; name: string; title: string }>): { lineIdx: number; title: string; chapterNum: number }[] {
+  const markers: { lineIdx: number; title: string; chapterNum: number }[] = []
+  
+  // Find where content starts (after TOC)
+  const contentStart = findContentStart(lines)
+  
+  // Search for each TOC entry in the text
+  for (const entry of tocEntries) {
+    // Normalize name: remove extra spaces, convert to uppercase
+    const normalizedName = entry.name.replace(/\s+/g, '\\s+')
+    // Try to find the pattern in the text: "1. CASEY" or just "CASEY" on its own line
+    // Pattern 1: "1. CASEY" (with number)
+    const pattern1 = new RegExp(`^${entry.number}\\.\\s*${normalizedName}$`, 'i')
+    // Pattern 2: Just "CASEY" (name only, case-insensitive)
+    const pattern2 = new RegExp(`^${normalizedName}$`, 'i')
+    
+    for (let i = contentStart; i < lines.length; i++) {
+      const line = lines[i].trim()
+      
+      // Skip if line is too long (not a chapter marker)
+      if (line.length > 100) continue
+      
+      // Try exact match: "1. CASEY"
+      if (pattern1.test(line)) {
+        const nextLine = lines[i + 1]?.trim() || ''
+        const nextNextLine = lines[i + 2]?.trim() || ''
+        
+        // Verify content follows
+        const hasContent = nextLine.length > 30 || 
+          (nextLine.length === 0 && nextNextLine.length > 30)
+        
+        if (hasContent) {
+          markers.push({ lineIdx: i, title: entry.title, chapterNum: entry.number })
+          console.log(`  Found marker for "${entry.title}" at line ${i}`)
+          break
+        }
+      }
+      
+      // Try name-only match: "CASEY"
+      if (entry.name.length <= 20 && pattern2.test(line)) {
+        const prevLine = lines[i - 1]?.trim() || ''
+        const nextLine = lines[i + 1]?.trim() || ''
+        const nextNextLine = lines[i + 2]?.trim() || ''
+        
+        // Should be preceded by empty/short line, followed by content
+        const validContext = (prevLine.length === 0 || prevLine.length < 30) &&
+          (nextLine.length > 30 || (nextLine.length === 0 && nextNextLine.length > 30))
+        
+        if (validContext) {
+          markers.push({ lineIdx: i, title: entry.title, chapterNum: entry.number })
+          console.log(`  Found marker for "${entry.title}" at line ${i} (name only)`)
+          break
+        }
+      }
+    }
+  }
+  
+  // Sort by line index
+  markers.sort((a, b) => a.lineIdx - b.lineIdx)
+  
+  return markers
 }
 
 /**
@@ -92,8 +220,12 @@ function scanForChapterMarkers(lines: string[], startLine: number): { lineIdx: n
   for (let i = startLine; i < lines.length; i++) {
     const line = lines[i].trim()
     
-    // Skip empty or very long lines
-    if (line.length === 0 || line.length > 60) continue
+    // Skip empty lines, but allow longer lines for numbered names (up to 100 chars)
+    if (line.length === 0) continue
+    
+    // Allow longer lines if they match numbered name pattern
+    const isNumberedName = /^\d{1,2}\.\s*[A-Za-z]/.test(line)
+    if (line.length > 100 && !isNumberedName) continue
     
     // Normalize: remove spaces and hyphens, convert to lowercase
     const normalized = line.replace(/\s+/g, '').replace(/-/g, '').toLowerCase()
@@ -164,20 +296,31 @@ function scanForChapterMarkers(lines: string[], startLine: number): { lineIdx: n
       const name = numberedNameMatch[2].trim()
       const nextLine = lines[i + 1]?.trim() || ''
       const nextNextLine = lines[i + 2]?.trim() || ''
+      const nextNextNextLine = lines[i + 3]?.trim() || ''
       
-      // Verify this looks like a chapter marker (followed by content, not more TOC entries)
-      const isInTOC = /^\d{1,2}\.\s*[A-Za-z]/.test(nextLine) // Next line is also "N. Name" format
+      // Check if we're still in TOC (multiple consecutive numbered entries)
+      // Look at next 3 lines - if 2+ are also numbered entries, we're likely in TOC
+      let numberedEntryCount = 0
+      for (let j = 1; j <= 3; j++) {
+        const checkLine = lines[i + j]?.trim() || ''
+        if (/^\d{1,2}\.\s*[A-Za-z]/.test(checkLine)) {
+          numberedEntryCount++
+        }
+      }
+      const isInTOC = numberedEntryCount >= 2
       
       if (!isInTOC) {
-        // Check if content follows
-        const hasContent = nextLine.length > 30 || 
-          (nextLine.length === 0 && nextNextLine.length > 30) ||
-          (nextLine.length < 30 && nextNextLine.length > 30)
+        // Check if content follows (prose text, not more TOC entries)
+        const hasContent = nextLine.length > 40 || 
+          (nextLine.length === 0 && nextNextLine.length > 40) ||
+          (nextLine.length < 30 && nextNextLine.length > 40 && nextNextNextLine.length > 40)
         
         if (hasContent) {
           markers.push({ lineIdx: i, title: `${num}. ${name}`, chapterNum: num })
           console.log(`  Found: ${num}. ${name} (numbered name) at line ${i}`)
         }
+      } else {
+        console.log(`  Skipped: ${num}. ${name} at line ${i} (likely TOC entry)`)
       }
     }
     
