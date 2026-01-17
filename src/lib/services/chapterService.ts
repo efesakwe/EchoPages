@@ -218,13 +218,13 @@ function scanForChapterMarkers(lines: string[]): { title: string; lineIdx: numbe
   
   for (let i = 30; i < lines.length; i++) {
     const line = lines[i].trim()
-    if (line.length === 0 || line.length > 60) continue
+    if (line.length === 0 || line.length > 80) continue
     
     const prevEmpty = i > 0 && lines[i - 1].trim().length < 5
     const lineLower = line.toLowerCase()
     
-    // Special sections
-    const specialMatch = line.match(/^(foreword|preface|prologue|epilogue|introduction|afterword)$/i)
+    // Special sections (more flexible matching)
+    const specialMatch = line.match(/^(foreword|preface|prologue|epilogue|introduction|afterword|acknowledgments?)/i)
     if (specialMatch && prevEmpty) {
       const keyword = specialMatch[1].toLowerCase()
       if (!foundSpecial.has(keyword)) {
@@ -235,11 +235,16 @@ function scanForChapterMarkers(lines: string[]): { title: string; lineIdx: numbe
       continue
     }
     
-    // Chapter X format (most reliable)
-    const chapterMatch = line.match(/^chapter\s+(\d+)/i)
+    // Chapter X format (most reliable) - also accept "Chapter One", "Chapter 1", "CHAPTER 1"
+    const chapterMatch = line.match(/^chapter\s+(one|two|three|four|five|six|seven|eight|nine|ten|\d+)/i)
     if (chapterMatch && prevEmpty) {
-      const num = parseInt(chapterMatch[1])
-      if (num === expectedNum) {
+      const matchText = chapterMatch[1]
+      let num = expectedNum
+      if (/^\d+$/.test(matchText)) {
+        num = parseInt(matchText)
+      }
+      
+      if (num === expectedNum || (expectedNum === 1 && markers.length === 0)) {
         markers.push({ title: line, lineIdx: i })
         console.log(`Found chapter: "${line}" at line ${i}`)
         expectedNum++
@@ -247,16 +252,30 @@ function scanForChapterMarkers(lines: string[]): { title: string; lineIdx: numbe
       }
     }
     
+    // Patterns like "1 Chapter Title" or "1. Chapter Title" or "1 Chapter Title"
+    const numberedPattern = line.match(/^(\d{1,2})\s+(chapter|.+)/i)
+    if (numberedPattern && prevEmpty) {
+      const num = parseInt(numberedPattern[1])
+      if (num === expectedNum || (expectedNum === 1 && markers.length === 0)) {
+        if (!isLikelyPageNumber(lines, i, num)) {
+          markers.push({ title: line, lineIdx: i })
+          console.log(`Found numbered chapter: "${line}" at line ${i}`)
+          expectedNum++
+          continue
+        }
+      }
+    }
+    
     // Standalone number - be VERY careful
     if (/^\d{1,2}$/.test(line) && prevEmpty) {
       const num = parseInt(line)
-      if (num === expectedNum) {
+      if (num === expectedNum || (expectedNum === 1 && markers.length === 0)) {
         // Extra validation: must NOT be a page number
         if (!isLikelyPageNumber(lines, i, num)) {
           const nextContent = lines.slice(i + 1, i + 15).join(' ')
           if (nextContent.length > 150) {
-            markers.push({ title: line, lineIdx: i })
-            console.log(`Found number: "${line}" at line ${i}`)
+            markers.push({ title: `Chapter ${num}`, lineIdx: i })
+            console.log(`Found standalone number: "${num}" at line ${i}`)
             expectedNum++
           }
         }
@@ -265,6 +284,131 @@ function scanForChapterMarkers(lines: string[]): { title: string; lineIdx: numbe
   }
   
   return markers.sort((a, b) => a.lineIdx - b.lineIdx)
+}
+
+/**
+ * Use LLM to detect chapter breaks
+ */
+async function detectChaptersWithLLM(text: string): Promise<Chapter[]> {
+  try {
+    const openai = require('openai').default
+    const apiKey = process.env.OPENAI_API_KEY
+    if (!apiKey) {
+      throw new Error('OPENAI_API_KEY not set')
+    }
+    const client = new openai({ apiKey })
+
+    // Sample the text (first 10000 and last 10000 chars + middle)
+    const sampleSize = 10000
+    const samples = [
+      text.substring(0, sampleSize),
+      text.length > sampleSize * 2 ? text.substring(Math.floor(text.length / 2), Math.floor(text.length / 2) + sampleSize) : '',
+      text.substring(Math.max(0, text.length - sampleSize))
+    ].filter(s => s.length > 0)
+
+    const sampleText = samples.join('\n\n[...middle of book...]\n\n')
+
+    console.log('Asking LLM to find chapter markers...')
+    const response = await client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a book parsing expert. Analyze the text and identify chapter markers. Look for patterns like "Chapter 1", "Chapter One", standalone numbers (1, 2, 3), "Prologue", "Epilogue", etc. Return a JSON array of chapter titles found in order.',
+        },
+        {
+          role: 'user',
+          content: `Find all chapter markers in this book text sample:\n\n${sampleText}\n\nReturn JSON array like: ["Chapter 1", "Chapter 2", "Chapter 3"] or ["Prologue", "Chapter One", "Chapter Two"]`,
+        },
+      ],
+      temperature: 0.1,
+      response_format: { type: 'json_object' },
+    })
+
+    const result = JSON.parse(response.choices[0]?.message?.content || '{}')
+    const chapterTitles = result.chapters || result.titles || []
+
+    if (chapterTitles.length === 0) {
+      return []
+    }
+
+    console.log(`LLM found ${chapterTitles.length} chapter titles: ${chapterTitles.slice(0, 5).join(', ')}...`)
+
+    // Now search for these titles in the full text
+    const lines = text.split('\n')
+    const locations: { title: string; lineIdx: number }[] = []
+
+    for (const title of chapterTitles) {
+      const titleLower = title.toLowerCase()
+      for (let i = 0; i < lines.length; i++) {
+        const lineLower = lines[i].trim().toLowerCase()
+        // Check for exact match or starts with
+        if (lineLower === titleLower || lineLower.startsWith(titleLower + ' ') || lineLower === titleLower.replace('chapter', '').trim()) {
+          locations.push({ title, lineIdx: i })
+          break
+        }
+      }
+    }
+
+    if (locations.length === 0) {
+      return []
+    }
+
+    // Extract chapters
+    const chapters: Chapter[] = []
+    for (let i = 0; i < locations.length; i++) {
+      const start = locations[i].lineIdx
+      const end = i + 1 < locations.length ? locations[i + 1].lineIdx : lines.length
+      const chapterText = lines.slice(start, end).join('\n').trim()
+      
+      if (chapterText.length > 50) {
+        chapters.push({
+          idx: i,
+          title: locations[i].title,
+          text: chapterText,
+        })
+      }
+    }
+
+    return chapters
+  } catch (error) {
+    console.error('LLM chapter detection error:', error)
+    return []
+  }
+}
+
+/**
+ * Split text into estimated chapters by size
+ */
+function splitByEstimatedSize(text: string): Chapter[] {
+  // Estimate average chapter size (10-15 pages, ~3000-5000 words = ~15000-25000 chars)
+  const avgChapterSize = 20000
+  const numChapters = Math.max(1, Math.ceil(text.length / avgChapterSize))
+  const chapterSize = Math.ceil(text.length / numChapters)
+
+  const chapters: Chapter[] = []
+  const lines = text.split('\n')
+
+  for (let i = 0; i < numChapters; i++) {
+    const startChar = i * chapterSize
+    const endChar = Math.min((i + 1) * chapterSize, text.length)
+    
+    // Find nearest line break
+    const startIdx = text.substring(0, startChar).split('\n').length - 1
+    const endIdx = text.substring(0, endChar).split('\n').length - 1
+    
+    const chapterText = lines.slice(startIdx, endIdx).join('\n').trim()
+    
+    if (chapterText.length > 100) {
+      chapters.push({
+        idx: i,
+        title: `Chapter ${i + 1}`,
+        text: chapterText,
+      })
+    }
+  }
+
+  return chapters
 }
 
 /**
@@ -305,8 +449,30 @@ export async function detectChapters(text: string): Promise<Chapter[]> {
   }
   
   console.log(`\nFound ${dedupedLocations.length} unique chapter locations`)
-  
+
+  // If no chapters found, try LLM-based detection as last resort
   if (dedupedLocations.length === 0) {
+    console.log('\n--- No chapters found, trying LLM-based detection ---')
+    try {
+      const llmChapters = await detectChaptersWithLLM(text)
+      if (llmChapters.length > 1) {
+        console.log(`LLM found ${llmChapters.length} chapters`)
+        return llmChapters
+      }
+    } catch (error) {
+      console.error('LLM chapter detection failed:', error)
+    }
+    
+    // Absolute last resort: split by estimated chapter size
+    console.log('\n--- Last resort: splitting by estimated chapter size ---')
+    const estimatedChapters = splitByEstimatedSize(text)
+    if (estimatedChapters.length > 1) {
+      console.log(`Split into ${estimatedChapters.length} estimated chapters`)
+      return estimatedChapters
+    }
+    
+    // If all else fails, return single chapter
+    console.warn('\n[WARN] Could not detect chapters, using full book as single chapter')
     return [{ idx: 0, title: 'Full Book', text }]
   }
   
