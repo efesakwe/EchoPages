@@ -132,16 +132,25 @@ function findMarkersFromTOC(lines: string[], tocEntries: Array<{ number: number;
   const contentStart = findContentStart(lines)
   
   // Search for each TOC entry in the text
+  // Track which lines have already been used to avoid duplicates
+  const usedLineIndices = new Set<number>()
+  
   for (const entry of tocEntries) {
-    // Normalize name: remove extra spaces, convert to uppercase
-    const normalizedName = entry.name.replace(/\s+/g, '\\s+')
+    // Normalize name: escape special regex characters and handle spaces
+    const escapedName = entry.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+')
     // Try to find the pattern in the text: "1. CASEY" or just "CASEY" on its own line
     // Pattern 1: "1. CASEY" (with number)
-    const pattern1 = new RegExp(`^${entry.number}\\.\\s*${normalizedName}$`, 'i')
+    const pattern1 = new RegExp(`^${entry.number}\\.\\s*${escapedName}$`, 'i')
     // Pattern 2: Just "CASEY" (name only, case-insensitive)
-    const pattern2 = new RegExp(`^${normalizedName}$`, 'i')
+    const pattern2 = new RegExp(`^${escapedName}$`, 'i')
     
-    for (let i = contentStart; i < lines.length; i++) {
+    let found = false
+    
+    // Search from content start, but skip already used lines
+    for (let i = contentStart; i < lines.length && !found; i++) {
+      // Skip if this line was already used as a marker
+      if (usedLineIndices.has(i)) continue
+      
       const line = lines[i].trim()
       
       // Skip if line is too long (not a chapter marker)
@@ -158,13 +167,15 @@ function findMarkersFromTOC(lines: string[], tocEntries: Array<{ number: number;
         
         if (hasContent) {
           markers.push({ lineIdx: i, title: entry.title, chapterNum: entry.number })
+          usedLineIndices.add(i)
           console.log(`  Found marker for "${entry.title}" at line ${i}`)
+          found = true
           break
         }
       }
       
-      // Try name-only match: "CASEY"
-      if (entry.name.length <= 20 && pattern2.test(line)) {
+      // Try name-only match: "CASEY" (only if name is reasonably short)
+      if (!found && entry.name.length <= 20 && pattern2.test(line)) {
         const prevLine = lines[i - 1]?.trim() || ''
         const nextLine = lines[i + 1]?.trim() || ''
         const nextNextLine = lines[i + 2]?.trim() || ''
@@ -175,15 +186,42 @@ function findMarkersFromTOC(lines: string[], tocEntries: Array<{ number: number;
         
         if (validContext) {
           markers.push({ lineIdx: i, title: entry.title, chapterNum: entry.number })
+          usedLineIndices.add(i)
           console.log(`  Found marker for "${entry.title}" at line ${i} (name only)`)
+          found = true
           break
         }
       }
     }
+    
+    if (!found) {
+      console.warn(`  WARNING: Could not find marker for "${entry.title}" in the text`)
+    }
   }
   
-  // Sort by line index
+  // Sort by line index to get correct reading order
   markers.sort((a, b) => a.lineIdx - b.lineIdx)
+  
+  // Re-number sequentially (1, 2, 3...) based on order, but preserve the name
+  // This ensures chapters are numbered sequentially even if TOC has gaps (e.g., 46, 47)
+  let sequentialNum = 1
+  for (const marker of markers) {
+    // Extract the name from the title (e.g., "46. DYLAN" -> "DYLAN")
+    const nameMatch = marker.title.match(/^\d+\.\s*(.+)$/)
+    if (nameMatch) {
+      const name = nameMatch[1].trim()
+      const originalNum = marker.chapterNum
+      marker.title = `${sequentialNum}. ${name}`
+      marker.chapterNum = sequentialNum++
+      console.log(`  Renumbered: ${originalNum}. ${name} -> ${marker.title}`)
+    } else {
+      // If no number in title, just add sequential number
+      const originalTitle = marker.title
+      marker.title = `${sequentialNum}. ${marker.title}`
+      marker.chapterNum = sequentialNum++
+      console.log(`  Renumbered: "${originalTitle}" -> ${marker.title}`)
+    }
+  }
   
   return markers
 }
@@ -382,12 +420,24 @@ function scanForChapterMarkers(lines: string[], startLine: number): { lineIdx: n
 function extractChapters(lines: string[], markers: { lineIdx: number; title: string; chapterNum: number }[]): Chapter[] {
   const chapters: Chapter[] = []
   
+  if (markers.length === 0) {
+    console.error('No markers provided for extraction')
+    return chapters
+  }
+  
+  console.log(`\nExtracting content for ${markers.length} chapters...`)
+  
   for (let i = 0; i < markers.length; i++) {
     const current = markers[i]
     const next = markers[i + 1]
     
     const startLine = current.lineIdx + 1
     const endLine = next ? next.lineIdx : lines.length
+    
+    // Check for suspiciously large chapters
+    const lineRange = endLine - startLine
+    const avgWordsPerLine = 50 // Rough estimate
+    const estimatedWords = lineRange * avgWordsPerLine
     
     // Get content, filter out watermarks
     const contentLines = lines.slice(startLine, endLine).filter(line => {
@@ -398,12 +448,23 @@ function extractChapters(lines: string[], markers: { lineIdx: number; title: str
     const content = contentLines.join('\n').trim()
     const wordCount = content.split(/\s+/).filter(w => w.length > 0).length
     
+    // Log chapter extraction details
+    console.log(`  Chapter ${i + 1} "${current.title}":`)
+    console.log(`    Lines: ${startLine}-${endLine} (${lineRange} lines)`)
+    console.log(`    Words: ${wordCount}`)
+    
+    if (wordCount > 10000) {
+      console.warn(`    WARNING: Chapter "${current.title}" is very large (${wordCount} words). This might indicate a missing chapter marker.`)
+    }
+    
     if (wordCount > 50) {
       chapters.push({
         idx: chapters.length,
         title: current.title,
         text: content,
       })
+    } else {
+      console.warn(`    WARNING: Chapter "${current.title}" is too short (${wordCount} words), skipping.`)
     }
   }
   
