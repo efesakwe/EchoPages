@@ -82,6 +82,19 @@ export async function POST(request: Request) {
       }
     }
 
+    // Log all metadata before inserting
+    console.log('Inserting book with metadata:', {
+      title: metadata.title || title.trim(),
+      author: metadata.author || author?.trim() || null,
+      published_date: metadata.publishedDate || null,
+      summary_length: metadata.summary?.length || 0,
+      summary_preview: metadata.summary?.substring(0, 100) || 'empty',
+      publisher: metadata.publisher || null,
+      category: metadata.category || null,
+      cover_image_url: metadata.coverImageUrl ? 'present' : 'missing',
+      isbn: metadata.isbn || null,
+    })
+
     // Create book record with metadata
     const { data: book, error: bookError } = await supabase
       .from('books')
@@ -91,7 +104,7 @@ export async function POST(request: Request) {
         pdf_url: pdfUrl,
         author: metadata.author || author?.trim() || null,
         published_date: metadata.publishedDate || null,
-        summary: metadata.summary,
+        summary: metadata.summary || null,
         publisher: metadata.publisher || null,
         category: metadata.category || null,
         cover_image_url: metadata.coverImageUrl || null,

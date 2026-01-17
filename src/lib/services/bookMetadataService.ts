@@ -106,6 +106,37 @@ function getIsbn(identifiers?: Array<{ type: string; identifier: string }>): str
   return isbn13?.identifier || isbn10?.identifier
 }
 
+function parsePublishedDate(dateStr?: string): string | undefined {
+  if (!dateStr) return undefined
+  
+  // If it's already in YYYY-MM-DD format
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    return dateStr
+  }
+  
+  // If it's just a year (YYYY)
+  if (/^\d{4}$/.test(dateStr)) {
+    return `${dateStr}-01-01`
+  }
+  
+  // If it's YYYY-MM format
+  if (/^\d{4}-\d{2}$/.test(dateStr)) {
+    return `${dateStr}-01`
+  }
+  
+  // Try to parse other formats
+  try {
+    const date = new Date(dateStr)
+    if (!isNaN(date.getTime())) {
+      return date.toISOString().split('T')[0]
+    }
+  } catch (e) {
+    // Ignore parse errors
+  }
+  
+  return undefined
+}
+
 export async function fetchBookMetadata(
   title: string, 
   extractedText?: string,
@@ -132,7 +163,7 @@ export async function fetchBookMetadata(
   let metadata: BookMetadata = {
     title: googleData?.title || title,
     author: providedAuthor || googleData?.authors?.[0] || 'Unknown Author',
-    publishedDate: googleData?.publishedDate,
+    publishedDate: parsePublishedDate(googleData?.publishedDate),
     summary: googleData?.description || '',
     publisher: googleData?.publisher,
     category: googleData?.categories?.[0] || 'Fiction',
@@ -192,7 +223,7 @@ Return ONLY valid JSON, no markdown formatting.`
     metadata = {
       title: result.title || metadata.title,
       author: providedAuthor || result.author || metadata.author,
-      publishedDate: result.publishedDate || metadata.publishedDate,
+      publishedDate: parsePublishedDate(result.publishedDate) || metadata.publishedDate,
       summary: result.summary || metadata.summary || 'No description available.',
       publisher: result.publisher || metadata.publisher,
       category: result.category || metadata.category,
