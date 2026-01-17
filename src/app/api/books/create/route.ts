@@ -126,7 +126,17 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Book created but no data returned' }, { status: 500 })
     }
 
-    console.log('Book created successfully:', book.id)
+    console.log('✅ Book created successfully:', {
+      id: book.id,
+      title: book.title,
+      author: book.author,
+      summary: book.summary ? `${book.summary.substring(0, 100)}...` : 'MISSING',
+      summaryLength: book.summary?.length || 0,
+      category: book.category || 'MISSING',
+      publisher: book.publisher || 'MISSING',
+      cover_image_url: book.cover_image_url || 'MISSING',
+    })
+    
     return NextResponse.json({ bookId: book.id })
   } catch (error: any) {
     console.error('Create book error:', error)

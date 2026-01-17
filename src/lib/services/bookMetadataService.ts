@@ -90,7 +90,7 @@ async function fetchFromGoogleBooks(title: string, author?: string): Promise<Goo
           if (itemTitle.includes(titleLower) || titleLower.includes(itemTitle)) {
             score += 10
           }
-          if (itemAuthors.some(a => a.includes(authorLower) || authorLower.includes(a))) {
+          if (itemAuthors.some((a: string) => a.includes(authorLower) || authorLower.includes(a))) {
             score += 10
           }
           // Bonus if it has an image
@@ -246,27 +246,42 @@ export async function fetchBookMetadata(
     series: undefined,
   }
   
-  // Try to enhance with OpenAI for better summary and series detection
+  // Use OpenAI to search the entire internet conceptually for comprehensive book information
+  // OpenAI models have training data from across the internet, so they can provide comprehensive info
   try {
+    console.log('Using AI to search for comprehensive book information across the internet...')
     const authorHint = providedAuthor ? `\nKnown author: ${providedAuthor}` : ''
-    const prompt = `You are a book metadata expert. Given a book title${extractedText ? ' and some extracted text from the book' : ''}${providedAuthor ? ' and the known author' : ''}, provide detailed information about the book.
+    const googleDesc = googleData?.description ? `\n\nNote: Google Books has this description (may be incomplete): ${googleData.description.substring(0, 500)}` : ''
+    const googleCategory = googleData?.categories?.length ? `\n\nNote: Google Books suggests these categories: ${googleData.categories.join(', ')}` : ''
+    
+    const prompt = `You are an expert book researcher with access to information from across the entire internet - including book review sites, publisher websites, library catalogs, Goodreads, Amazon, Wikipedia, literary databases, and all other online sources.
 
-Title: ${title}${authorHint}
-${extractedText ? `\nExtracted text (first 2000 chars):\n${extractedText.substring(0, 2000)}` : ''}
-${googleData?.description ? `\nExisting description: ${googleData.description}` : ''}
+Your task: Research and provide COMPREHENSIVE, DETAILED information about this book as if you've searched the entire internet:
 
-Please provide a JSON object with the following fields:
-- title: The full title of the book
-- author: The author's full name (use the known author if provided)
-- publishedDate: Publication date in YYYY-MM-DD format (or best estimate)
-- summary: A detailed synopsis/description (2-4 paragraphs, make it engaging). If an existing description is provided, enhance it.
-- publisher: The publisher name
-- category: Primary genre/category (e.g., "Literature & Fiction", "Mystery", "Romance", "Science Fiction", "Historical Fiction", "Christian Fiction")
-- isbn: ISBN if known (optional)
-- language: Language (default: "English")
-- series: Series name if part of a series (e.g., "Queen Esther's Court, Book 2")
+Book to research:
+- Title: ${title}${authorHint}${googleDesc}${googleCategory}
+${extractedText ? `\n\nActual text excerpt from the book (first 2000 chars):\n${extractedText.substring(0, 2000)}` : ''}
 
-Return ONLY valid JSON, no markdown formatting.`
+Based on your research across all internet sources, you MUST provide ALL of the following in JSON format:
+
+- title: The full, official title of the book
+- author: The author's full name${providedAuthor ? ` (must be exactly: ${providedAuthor})` : ''}
+- publishedDate: Publication date in YYYY-MM-DD format (or YYYY-MM-DD if only year is known, or just YYYY)
+- summary: A COMPREHENSIVE, DETAILED 3-5 paragraph synopsis/description. This should be engaging, informative, and capture the essence of the story. Include plot points, themes, and what makes this book notable. Do NOT just copy the Google Books description - provide your own comprehensive summary based on your research.
+- publisher: The publisher name (include imprint if relevant)
+- category: The PRIMARY genre/category. Be specific. Examples: "Mystery", "Romance", "Christian Fiction", "Science Fiction", "Historical Fiction", "Thriller", "Horror", "Literary Fiction", "Young Adult", "Biography", "Non-Fiction", etc.
+- isbn: ISBN-13 if known (preferred) or ISBN-10
+- language: Language (default: English)
+- series: Series name and number if part of a series (e.g., "Kaely Quinn Profiler, Book 2" or "Harry Potter, Book 1")
+
+CRITICAL REQUIREMENTS:
+1. The summary MUST be comprehensive, detailed, and engaging (minimum 3 paragraphs, 200+ words)
+2. Research across multiple sources - don't rely solely on Google Books description
+3. Provide accurate category/genre based on the actual content
+4. Include publisher information if available
+5. If this is part of a series, include the series name and book number
+
+Return ONLY valid JSON, no markdown code blocks or extra text.`
 
     const openai = getOpenAI()
     const response = await openai.chat.completions.create({
@@ -274,7 +289,7 @@ Return ONLY valid JSON, no markdown formatting.`
       messages: [
         {
           role: 'system',
-          content: 'You are a helpful assistant that extracts book metadata and returns it as JSON. Always return valid JSON. If the author is provided, use that exact name.',
+          content: 'You are an expert book researcher with knowledge from across the entire internet. You can access information from book review sites, publisher websites, library catalogs, Goodreads, Amazon, Wikipedia, literary databases, and all online sources. You MUST always provide comprehensive, detailed summaries (3-5 paragraphs minimum), accurate categories, and all other metadata fields. Research thoroughly and provide information as if you\'ve searched the entire internet. Return ONLY valid JSON without markdown formatting.',
         },
         {
           role: 'user',
@@ -285,29 +300,53 @@ Return ONLY valid JSON, no markdown formatting.`
       response_format: { type: 'json_object' },
     })
 
-    const result = JSON.parse(response.choices[0]?.message?.content || '{}')
+    const resultText = response.choices[0]?.message?.content || '{}'
+    console.log('OpenAI raw response length:', resultText.length)
+    
+    let result
+    try {
+      result = JSON.parse(resultText)
+    } catch (parseError) {
+      console.error('Failed to parse OpenAI response:', resultText.substring(0, 500))
+      throw new Error('Invalid JSON from OpenAI')
+    }
+    
     console.log('OpenAI enhanced metadata:', { 
-      hasEnhancedSummary: !!result.summary,
+      title: result.title,
+      author: result.author,
+      hasSummary: !!result.summary,
+      summaryLength: result.summary?.length || 0,
+      category: result.category,
+      publisher: result.publisher,
       series: result.series,
-      category: result.category 
     })
 
     // Merge OpenAI results with Google Books data (prefer Google for cover)
     metadata = {
-      title: result.title || metadata.title,
-      author: providedAuthor || result.author || metadata.author,
+      title: result.title || metadata.title || title,
+      author: providedAuthor || result.author || metadata.author || 'Unknown Author',
       publishedDate: parsePublishedDate(result.publishedDate) || metadata.publishedDate,
-      summary: result.summary || metadata.summary || 'No description available.',
-      publisher: result.publisher || metadata.publisher,
-      category: result.category || metadata.category,
+      summary: result.summary || metadata.summary || googleData?.description || 'No description available.',
+      publisher: result.publisher || metadata.publisher || googleData?.publisher,
+      category: result.category || metadata.category || googleData?.categories?.[0] || 'Fiction',
       coverImageUrl: coverImageUrl, // Always use Google Books cover
       isbn: metadata.isbn || result.isbn,
-      language: result.language || 'English',
-      series: result.series,
+      language: result.language || metadata.language || 'English',
+      series: result.series || metadata.series,
+    }
+    
+    // Ensure we have a summary
+    if (!metadata.summary || metadata.summary.trim().length < 50) {
+      console.warn('⚠️ Summary is too short or missing, creating fallback')
+      metadata.summary = `${metadata.title} by ${metadata.author}. ${metadata.category} novel.`
     }
   } catch (openaiError: any) {
     console.error('OpenAI enhancement failed:', openaiError.message)
-    // Continue with Google Books data only
+    console.error('Error details:', openaiError)
+    // Ensure we have at least a basic summary even if OpenAI fails
+    if (!metadata.summary || metadata.summary.trim().length < 10) {
+      metadata.summary = `${metadata.title}${metadata.author !== 'Unknown Author' ? ` by ${metadata.author}` : ''}. ${metadata.category} novel.`
+    }
   }
   
   // If still no cover, try one more search with the metadata we have
@@ -319,13 +358,30 @@ Return ONLY valid JSON, no markdown formatting.`
     }
   }
   
-  console.log('=== Final metadata:', {
+  console.log('=== Final metadata being returned:', {
     title: metadata.title,
     author: metadata.author,
-    hasSummary: !!metadata.summary && metadata.summary !== 'No description available.',
+    summary: metadata.summary ? `${metadata.summary.substring(0, 100)}...` : 'MISSING',
+    summaryLength: metadata.summary?.length || 0,
+    category: metadata.category || 'MISSING',
+    publisher: metadata.publisher || 'MISSING',
+    publishedDate: metadata.publishedDate || 'MISSING',
     hasCover: !!metadata.coverImageUrl,
-    category: metadata.category,
+    coverUrl: metadata.coverImageUrl || 'MISSING',
+    isbn: metadata.isbn || 'MISSING',
+    series: metadata.series || 'MISSING',
   })
+
+  // Final validation - ensure critical fields are present
+  if (!metadata.summary || metadata.summary.trim().length < 20) {
+    console.error('❌ SUMMARY IS TOO SHORT OR MISSING!')
+    metadata.summary = `${metadata.title} by ${metadata.author}. ${metadata.category || 'Fiction'} novel.`
+  }
+  
+  if (!metadata.category) {
+    console.error('❌ CATEGORY IS MISSING!')
+    metadata.category = 'Fiction'
+  }
 
   return metadata
 }
