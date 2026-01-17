@@ -9,7 +9,7 @@ const ChapterSchema = z.object({
 
 export type Chapter = z.infer<typeof ChapterSchema>
 
-// Number words (with and without hyphens)
+// Number words - expanded to 50
 const NUMBER_WORDS = [
   'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
   'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty',
@@ -17,7 +17,8 @@ const NUMBER_WORDS = [
   'twentysix', 'twentyseven', 'twentyeight', 'twentynine', 'thirty',
   'thirtyone', 'thirtytwo', 'thirtythree', 'thirtyfour', 'thirtyfive',
   'thirtysix', 'thirtyseven', 'thirtyeight', 'thirtynine', 'forty',
-  'fortyone', 'fortytwo', 'fortythree', 'fortyfour', 'fortyfive'
+  'fortyone', 'fortytwo', 'fortythree', 'fortyfour', 'fortyfive',
+  'fortysix', 'fortyseven', 'fortyeight', 'fortynine', 'fifty'
 ]
 
 /**
@@ -79,7 +80,7 @@ function findContentStart(lines: string[]): number {
       }
     }
   }
-  return 50 // Default
+  return 30 // Default - skip first 30 lines
 }
 
 /**
@@ -92,15 +93,15 @@ function scanForChapterMarkers(lines: string[], startLine: number): { lineIdx: n
     const line = lines[i].trim()
     
     // Skip empty or very long lines
-    if (line.length === 0 || line.length > 50) continue
+    if (line.length === 0 || line.length > 60) continue
     
     // Normalize: remove spaces and hyphens, convert to lowercase
     const normalized = line.replace(/\s+/g, '').replace(/-/g, '').toLowerCase()
     
-    // Check for PROLOGUE/EPILOGUE
+    // Check for PROLOGUE/EPILOGUE (with or without spaces)
     if (normalized === 'prologue') {
       markers.push({ lineIdx: i, title: 'Prologue', chapterNum: 0 })
-      console.log(`  Found: Prologue at line ${i}`)
+      console.log(`  Found: Prologue at line ${i} ("${line}")`)
       continue
     }
     if (normalized === 'epilogue') {
@@ -114,13 +115,21 @@ function scanForChapterMarkers(lines: string[], startLine: number): { lineIdx: n
       continue
     }
     
-    // Check for number words
+    // Check for number words (ONE, TWO, etc. - with or without spaces)
     const wordIndex = NUMBER_WORDS.indexOf(normalized)
     if (wordIndex >= 0) {
       const chapterNum = wordIndex + 1
-      // Verify the next line is actual content (not another chapter marker)
+      // Verify the next line looks like content start (not another short line)
       const nextLine = lines[i + 1]?.trim() || ''
-      if (nextLine.length > 20 || nextLine.length === 0) {
+      const nextNextLine = lines[i + 2]?.trim() || ''
+      
+      // Next line should be content OR empty (then content after)
+      const looksLikeChapterStart = 
+        nextLine.length > 30 || // Actual content
+        (nextLine.length === 0 && nextNextLine.length > 30) || // Empty then content
+        (nextLine.length < 30 && nextLine.length > 0 && nextNextLine.length > 30) // Subtitle then content
+      
+      if (looksLikeChapterStart) {
         markers.push({ lineIdx: i, title: `Chapter ${chapterNum}`, chapterNum })
         console.log(`  Found: Chapter ${chapterNum} ("${line}") at line ${i}`)
       }
@@ -136,7 +145,7 @@ function scanForChapterMarkers(lines: string[], startLine: number): { lineIdx: n
       continue
     }
     
-    // Check for standalone digits
+    // Check for standalone digits (1, 2, 3...)
     if (/^\d{1,2}$/.test(line)) {
       const num = parseInt(line)
       const nextLine = lines[i + 1]?.trim() || ''
@@ -148,8 +157,23 @@ function scanForChapterMarkers(lines: string[], startLine: number): { lineIdx: n
     }
   }
   
-  // Sort by chapter number, keeping prologue first and epilogue/acknowledgments last
-  markers.sort((a, b) => a.chapterNum - b.chapterNum)
+  // Sort by line index to get correct order
+  markers.sort((a, b) => a.lineIdx - b.lineIdx)
+  
+  // Re-assign chapter numbers based on order (Prologue=0, then 1,2,3...)
+  let chapterCounter = 1
+  for (const marker of markers) {
+    if (marker.title === 'Prologue') {
+      marker.chapterNum = 0
+    } else if (marker.title === 'Epilogue') {
+      marker.chapterNum = 998
+    } else if (marker.title === 'Acknowledgments') {
+      marker.chapterNum = 999
+    } else {
+      marker.chapterNum = chapterCounter++
+      marker.title = `Chapter ${marker.chapterNum}`
+    }
+  }
   
   return markers
 }
@@ -160,12 +184,9 @@ function scanForChapterMarkers(lines: string[], startLine: number): { lineIdx: n
 function extractChapters(lines: string[], markers: { lineIdx: number; title: string; chapterNum: number }[]): Chapter[] {
   const chapters: Chapter[] = []
   
-  // Sort by line index for extraction
-  const sortedMarkers = [...markers].sort((a, b) => a.lineIdx - b.lineIdx)
-  
-  for (let i = 0; i < sortedMarkers.length; i++) {
-    const current = sortedMarkers[i]
-    const next = sortedMarkers[i + 1]
+  for (let i = 0; i < markers.length; i++) {
+    const current = markers[i]
+    const next = markers[i + 1]
     
     const startLine = current.lineIdx + 1
     const endLine = next ? next.lineIdx : lines.length
@@ -188,15 +209,7 @@ function extractChapters(lines: string[], markers: { lineIdx: number; title: str
     }
   }
   
-  // Re-sort chapters by their intended order (prologue first, then numbered, then epilogue)
-  chapters.sort((a, b) => {
-    const orderA = markers.find(m => m.title === a.title)?.chapterNum ?? 500
-    const orderB = markers.find(m => m.title === b.title)?.chapterNum ?? 500
-    return orderA - orderB
-  })
-  
-  // Re-index
-  return chapters.map((ch, idx) => ({ ...ch, idx }))
+  return chapters
 }
 
 /**
