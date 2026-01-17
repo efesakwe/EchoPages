@@ -21,84 +21,141 @@ interface BookMetadata {
   series?: string
 }
 
+interface GoogleBooksResult {
+  title?: string
+  authors?: string[]
+  description?: string
+  publishedDate?: string
+  publisher?: string
+  categories?: string[]
+  imageLinks?: {
+    extraLarge?: string
+    large?: string
+    medium?: string
+    small?: string
+    thumbnail?: string
+    smallThumbnail?: string
+  }
+  industryIdentifiers?: Array<{ type: string; identifier: string }>
+}
+
+async function fetchFromGoogleBooks(title: string, author?: string): Promise<GoogleBooksResult | null> {
+  try {
+    const searchQuery = author 
+      ? `intitle:${title} inauthor:${author}`
+      : title
+    
+    console.log('Google Books search query:', searchQuery)
+    
+    const response = await fetch(
+      `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(searchQuery)}&maxResults=5`
+    )
+    const data = await response.json()
+    
+    console.log('Google Books results:', data.totalItems || 0)
+    
+    if (!data.items || data.items.length === 0) {
+      return null
+    }
+    
+    // Find the best match
+    let bestMatch = data.items[0]
+    
+    if (author) {
+      const authorLower = author.toLowerCase()
+      for (const item of data.items) {
+        const authors = item.volumeInfo?.authors || []
+        if (authors.some((a: string) => a.toLowerCase().includes(authorLower) || authorLower.includes(a.toLowerCase()))) {
+          bestMatch = item
+          break
+        }
+      }
+    }
+    
+    return bestMatch.volumeInfo || null
+  } catch (error) {
+    console.error('Google Books API error:', error)
+    return null
+  }
+}
+
+function getCoverUrl(imageLinks?: GoogleBooksResult['imageLinks']): string | undefined {
+  if (!imageLinks) return undefined
+  
+  // Prefer higher resolution
+  const url = imageLinks.extraLarge || 
+              imageLinks.large || 
+              imageLinks.medium || 
+              imageLinks.small || 
+              imageLinks.thumbnail ||
+              imageLinks.smallThumbnail
+  
+  if (!url) return undefined
+  
+  // Convert to HTTPS and improve quality
+  return url
+    .replace('http://', 'https://')
+    .replace('&zoom=1', '&zoom=0')
+    .replace('&edge=curl', '')
+}
+
+function getIsbn(identifiers?: Array<{ type: string; identifier: string }>): string | undefined {
+  if (!identifiers) return undefined
+  const isbn13 = identifiers.find(i => i.type === 'ISBN_13')
+  const isbn10 = identifiers.find(i => i.type === 'ISBN_10')
+  return isbn13?.identifier || isbn10?.identifier
+}
+
 export async function fetchBookMetadata(
   title: string, 
   extractedText?: string,
   providedAuthor?: string
 ): Promise<BookMetadata> {
+  console.log('=== Starting metadata fetch for:', title, 'by', providedAuthor || 'unknown')
+  
+  // First, always try Google Books for cover and basic info
+  const googleData = await fetchFromGoogleBooks(title, providedAuthor)
+  
+  const coverImageUrl = getCoverUrl(googleData?.imageLinks)
+  const isbn = getIsbn(googleData?.industryIdentifiers)
+  
+  console.log('Google Books data:', {
+    found: !!googleData,
+    title: googleData?.title,
+    authors: googleData?.authors,
+    hasDescription: !!googleData?.description,
+    hasCover: !!coverImageUrl,
+    categories: googleData?.categories,
+  })
+  
+  // Build base metadata from Google Books
+  let metadata: BookMetadata = {
+    title: googleData?.title || title,
+    author: providedAuthor || googleData?.authors?.[0] || 'Unknown Author',
+    publishedDate: googleData?.publishedDate,
+    summary: googleData?.description || '',
+    publisher: googleData?.publisher,
+    category: googleData?.categories?.[0] || 'Fiction',
+    coverImageUrl,
+    isbn,
+    language: 'English',
+    series: undefined,
+  }
+  
+  // Try to enhance with OpenAI for better summary and series detection
   try {
-    // First, try to get the cover from Google Books using title + provided author
-    // This is the most reliable way to get the correct cover
-    let coverImageUrl: string | undefined
-    const searchAuthor = providedAuthor || ''
-    
-    console.log('Searching Google Books for:', title, 'by', searchAuthor)
-    
-    try {
-      // Build a precise search query
-      const searchQuery = providedAuthor 
-        ? `intitle:${title} inauthor:${providedAuthor}`
-        : title
-      
-      const googleBooksResponse = await fetch(
-        `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(searchQuery)}&maxResults=5`
-      )
-      const googleBooksData = await googleBooksResponse.json()
-      
-      console.log('Google Books results:', googleBooksData.totalItems || 0)
-      
-      if (googleBooksData.items && googleBooksData.items.length > 0) {
-        // Find the best match - prefer one with the exact author if provided
-        let bestMatch = googleBooksData.items[0]
-        
-        if (providedAuthor) {
-          const authorLower = providedAuthor.toLowerCase()
-          for (const item of googleBooksData.items) {
-            const authors = item.volumeInfo?.authors || []
-            if (authors.some((a: string) => a.toLowerCase().includes(authorLower) || authorLower.includes(a.toLowerCase()))) {
-              bestMatch = item
-              break
-            }
-          }
-        }
-        
-        // Get the highest resolution cover available
-        const imageLinks = bestMatch.volumeInfo?.imageLinks
-        if (imageLinks) {
-          // Prefer extraLarge > large > medium > small > thumbnail
-          coverImageUrl = imageLinks.extraLarge || 
-                         imageLinks.large || 
-                         imageLinks.medium || 
-                         imageLinks.small || 
-                         imageLinks.thumbnail
-          
-          if (coverImageUrl) {
-            // Convert to HTTPS and get higher resolution
-            coverImageUrl = coverImageUrl
-              .replace('http://', 'https://')
-              .replace('&zoom=1', '&zoom=0')
-              .replace('&edge=curl', '') // Remove curl effect
-            
-            console.log('Found cover URL:', coverImageUrl)
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Failed to fetch cover from Google Books:', error)
-    }
-
-    // Use OpenAI to get detailed metadata
     const authorHint = providedAuthor ? `\nKnown author: ${providedAuthor}` : ''
     const prompt = `You are a book metadata expert. Given a book title${extractedText ? ' and some extracted text from the book' : ''}${providedAuthor ? ' and the known author' : ''}, provide detailed information about the book.
 
 Title: ${title}${authorHint}
 ${extractedText ? `\nExtracted text (first 2000 chars):\n${extractedText.substring(0, 2000)}` : ''}
+${googleData?.description ? `\nExisting description: ${googleData.description}` : ''}
 
 Please provide a JSON object with the following fields:
 - title: The full title of the book
 - author: The author's full name (use the known author if provided)
 - publishedDate: Publication date in YYYY-MM-DD format (or best estimate)
-- summary: A detailed synopsis/description (2-4 paragraphs, make it engaging)
+- summary: A detailed synopsis/description (2-4 paragraphs, make it engaging). If an existing description is provided, enhance it.
 - publisher: The publisher name
 - category: Primary genre/category (e.g., "Literature & Fiction", "Mystery", "Romance", "Science Fiction", "Historical Fiction", "Christian Fiction")
 - isbn: ISBN if known (optional)
@@ -125,47 +182,46 @@ Return ONLY valid JSON, no markdown formatting.`
     })
 
     const result = JSON.parse(response.choices[0]?.message?.content || '{}')
+    console.log('OpenAI enhanced metadata:', { 
+      hasEnhancedSummary: !!result.summary,
+      series: result.series,
+      category: result.category 
+    })
 
-    // If we still don't have a cover, try one more time with AI-determined author
-    if (!coverImageUrl && result.author) {
-      try {
-        const retryQuery = `intitle:${title} inauthor:${result.author}`
-        const retryResponse = await fetch(
-          `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(retryQuery)}&maxResults=1`
-        )
-        const retryData = await retryResponse.json()
-        
-        if (retryData.items?.[0]?.volumeInfo?.imageLinks?.thumbnail) {
-          coverImageUrl = retryData.items[0].volumeInfo.imageLinks.thumbnail
-            .replace('http://', 'https://')
-            .replace('&zoom=1', '&zoom=0')
-        }
-      } catch (error) {
-        console.error('Failed to fetch cover on retry:', error)
-      }
-    }
-
-    return {
-      title: result.title || title,
-      author: providedAuthor || result.author || 'Unknown Author',
-      publishedDate: result.publishedDate || undefined,
-      summary: result.summary || 'No description available.',
-      publisher: result.publisher || undefined,
-      category: result.category || 'Fiction',
-      coverImageUrl: coverImageUrl || undefined,
-      isbn: result.isbn || undefined,
+    // Merge OpenAI results with Google Books data (prefer Google for cover)
+    metadata = {
+      title: result.title || metadata.title,
+      author: providedAuthor || result.author || metadata.author,
+      publishedDate: result.publishedDate || metadata.publishedDate,
+      summary: result.summary || metadata.summary || 'No description available.',
+      publisher: result.publisher || metadata.publisher,
+      category: result.category || metadata.category,
+      coverImageUrl: coverImageUrl, // Always use Google Books cover
+      isbn: metadata.isbn || result.isbn,
       language: result.language || 'English',
-      series: result.series || undefined,
+      series: result.series,
     }
-  } catch (error) {
-    console.error('Failed to fetch book metadata:', error)
-    // Return fallback metadata
-    return {
-      title,
-      author: providedAuthor || 'Unknown Author',
-      summary: 'No description available.',
-      category: 'Fiction',
-      language: 'English',
+  } catch (openaiError: any) {
+    console.error('OpenAI enhancement failed:', openaiError.message)
+    // Continue with Google Books data only
+  }
+  
+  // If still no cover, try one more search with the metadata we have
+  if (!metadata.coverImageUrl && metadata.author && metadata.author !== 'Unknown Author') {
+    console.log('Retrying cover search with author:', metadata.author)
+    const retryData = await fetchFromGoogleBooks(title, metadata.author)
+    if (retryData?.imageLinks) {
+      metadata.coverImageUrl = getCoverUrl(retryData.imageLinks)
     }
   }
+  
+  console.log('=== Final metadata:', {
+    title: metadata.title,
+    author: metadata.author,
+    hasSummary: !!metadata.summary && metadata.summary !== 'No description available.',
+    hasCover: !!metadata.coverImageUrl,
+    category: metadata.category,
+  })
+
+  return metadata
 }
