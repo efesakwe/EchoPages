@@ -348,25 +348,47 @@ function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: stri
   
   console.log(`  Found ${tocTitles.length} chapter titles in TOC (lines ${tocStart}-${tocEnd})`)
   
-  // Step 2: Find where these chapters actually START in the main content
-  // Content starts after the TOC/frontmatter
+  // Step 2: Find where the Notes/References section starts (to avoid it)
+  let notesStart = lines.length
+  for (let i = Math.floor(lines.length * 0.7); i < lines.length; i++) {
+    const line = lines[i].trim().toLowerCase()
+    if (line === 'notes' || line === 'endnotes' || line === 'references' || 
+        line.includes('back to note reference') || /^\d+\.\s+[a-z]+\s+\dv\d/.test(line)) {
+      notesStart = i
+      console.log(`  Notes section detected at line ${i}`)
+      break
+    }
+  }
+  
+  // Step 3: Find where these chapters actually START in the main content
+  // Content starts after the TOC/frontmatter, but BEFORE the Notes section
   const contentStart = Math.max(tocEnd + 10, 150)
+  const contentEnd = notesStart - 50  // Stop well before Notes
   const foundTitles = new Set<string>()
+  
+  console.log(`  Searching for chapters between lines ${contentStart} and ${contentEnd}`)
   
   for (const tocTitle of tocTitles) {
     const normalizedTocTitle = tocTitle.toLowerCase().trim()
     
-    // Search for this title in the main content
-    for (let i = contentStart; i < lines.length; i++) {
+    // Search for this title in the main content (NOT in Notes section)
+    for (let i = contentStart; i < contentEnd; i++) {
       const line = lines[i].trim()
       const normalizedLine = line.toLowerCase().trim()
       
       // Check for exact or near-exact match
       if (normalizedLine === normalizedTocTitle || line === tocTitle) {
-        // Make sure it looks like a chapter heading (sparse context)
-        const prevLine = lines[i - 1]?.trim() || ''
+        // Make sure it's not followed by "BACK TO NOTE" (which indicates Notes section)
         const nextLine = lines[i + 1]?.trim() || ''
+        const nextNextLine = lines[i + 2]?.trim() || ''
         
+        if (nextLine.includes('BACK TO NOTE') || nextNextLine.includes('BACK TO NOTE')) {
+          console.log(`    Skipping "${tocTitle}" at line ${i} (in Notes section)`)
+          continue
+        }
+        
+        // Make sure it looks like a chapter heading
+        const prevLine = lines[i - 1]?.trim() || ''
         const looksLikeHeading = 
           (prevLine.length === 0 || prevLine.length < 30) ||
           (nextLine.length === 0 || nextLine.length < 50)
