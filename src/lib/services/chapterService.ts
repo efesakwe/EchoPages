@@ -45,22 +45,47 @@ export async function detectChapters(
     }
   }
   
-  // Strategy 1: Try to find TOC with numbered entries (e.g., "1. CASEY")
-  const tocEntries = findTOC(lines)
-  if (tocEntries.length > 0) {
-    console.log(`\nFound TOC with ${tocEntries.length} numbered entries`)
-    const markersFromTOC = findMarkersFromTOC(lines, tocEntries)
-    if (markersFromTOC.length >= 2) {
-      console.log(`\nFound ${markersFromTOC.length} chapter markers from TOC`)
-      const chapters = extractChapters(lines, markersFromTOC)
-      if (chapters.length >= 2) {
-        logResults(chapters, text)
-        return chapters
-      }
+  // Strategy 3 FIRST for topic-based books (Goal #1, Dust, etc.)
+  // This avoids picking up subsections like "1. To be with your rabbi" as chapters
+  console.log('\n--- Strategy 3: Trying topic-based chapter detection FIRST ---')
+  const topicMarkers = findTopicBasedChapters(lines)
+  if (topicMarkers.length >= 3) {
+    console.log(`\nFound ${topicMarkers.length} topic-based chapter markers - using these!`)
+    const chapters = extractChapters(lines, topicMarkers)
+    if (chapters.length >= 3) {
+      logResults(chapters, text)
+      return chapters
     }
   }
   
-  // Strategy 2: Scan entire document for chapter markers
+  // Strategy 1: Try to find TOC with numbered entries (e.g., "1. CASEY", "47. DYLAN")
+  // Only for books with ALL-CAPS character names as chapters
+  const tocEntries = findTOC(lines)
+  if (tocEntries.length > 0) {
+    console.log(`\nFound TOC with ${tocEntries.length} numbered entries`)
+    
+    // Sanity check: TOC entries should be short (1-3 words) and ALL CAPS for this strategy
+    // e.g., "CASEY", "DYLAN" - not "To be with your rabbi"
+    const looksLikeCharacterChapters = tocEntries.every(e => 
+      e.name.length < 30 && /^[A-Z\s]+$/.test(e.name)
+    )
+    
+    if (looksLikeCharacterChapters) {
+      const markersFromTOC = findMarkersFromTOC(lines, tocEntries)
+      if (markersFromTOC.length >= 2) {
+        console.log(`\nFound ${markersFromTOC.length} chapter markers from TOC`)
+        const chapters = extractChapters(lines, markersFromTOC)
+        if (chapters.length >= 2) {
+          logResults(chapters, text)
+          return chapters
+        }
+      }
+    } else {
+      console.log('  TOC entries look like subsections, skipping Strategy 1')
+    }
+  }
+  
+  // Strategy 2: Scan entire document for standard chapter markers (Chapter 1, ONE, PROLOGUE)
   console.log('\n--- Strategy 2: Scanning for standard chapter markers ---')
   const contentStart = findContentStart(lines)
   console.log(`Content starts at line: ${contentStart}`)
@@ -76,11 +101,9 @@ export async function detectChapters(
     }
   }
   
-  // Strategy 3: Try topic-based TOC detection (e.g., "Goal #1: Be with Jesus", "Dust")
-  console.log('\n--- Strategy 3: Trying topic-based chapter detection ---')
-  const topicMarkers = findTopicBasedChapters(lines)
+  // Fallback: If topic markers found at least 2, use them
   if (topicMarkers.length >= 2) {
-    console.log(`\nFound ${topicMarkers.length} topic-based chapter markers`)
+    console.log(`\nFallback: Using ${topicMarkers.length} topic-based markers`)
     const chapters = extractChapters(lines, topicMarkers)
     if (chapters.length >= 2) {
       logResults(chapters, text)
