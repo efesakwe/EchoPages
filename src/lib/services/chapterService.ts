@@ -442,8 +442,36 @@ function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: stri
           }
           
           if (prevIsTransition && lineIsShort && hasContentNearby) {
-            markers.push({ lineIdx: i, title: chapter.title, chapterNum: markers.length + 1 })
-            console.log(`    Found "${chapter.title}" at line ${i} (matched: "${term}")`)
+            // Determine actual chapter start line
+            let actualStartLine = i
+            
+            // If this is the main chapter title itself, use this line
+            const isMainTitleMatch = term.toLowerCase() === chapter.title.toLowerCase()
+            
+            // If matched via subsection, look backwards for the actual chapter start
+            // (usually after an OceanofPDF marker or cluster of empty lines)
+            if (!isMainTitleMatch) {
+              for (let lookBack = i - 1; lookBack >= Math.max(contentStart, i - 100); lookBack--) {
+                const backLine = lines[lookBack]?.trim() || ''
+                
+                // Found an OceanofPDF marker - chapter starts after it
+                if (/^OceanofPDF/i.test(backLine)) {
+                  // Skip any empty lines after OceanofPDF
+                  for (let skip = lookBack + 1; skip < i; skip++) {
+                    const skipLine = lines[skip]?.trim() || ''
+                    if (skipLine.length > 0 && !/^OceanofPDF/i.test(skipLine)) {
+                      actualStartLine = skip
+                      console.log(`      Adjusted start to line ${actualStartLine} (after OceanofPDF at ${lookBack})`)
+                      break
+                    }
+                  }
+                  break
+                }
+              }
+            }
+            
+            markers.push({ lineIdx: actualStartLine, title: chapter.title, chapterNum: markers.length + 1 })
+            console.log(`    Found "${chapter.title}" at line ${actualStartLine} (matched: "${term}" at ${i})`)
             found = true
             break
           }
@@ -842,6 +870,9 @@ export async function saveChapters(bookId: string, chapters: Chapter[]): Promise
         idx: chapter.idx,
         title: sanitizeText(chapter.title),
         text_content: sanitizeText(chapter.text),
+
+
+
       })
 
     if (error) throw new Error(`Failed to save chapter ${chapter.idx}: ${error.message}`)
