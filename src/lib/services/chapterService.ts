@@ -273,121 +273,130 @@ function findMarkersFromTOC(lines: string[], tocEntries: Array<{ number: number;
 }
 
 /**
- * Strategy 3: Find topic-based chapters by scanning the ENTIRE document
- * This handles books with themed/topic chapters like "Goal #1: Be with Jesus", "Dust"
+ * Strategy 3: Find topic-based chapters by extracting titles from TOC
+ * Then finding those exact titles in the main content
  */
 function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: string; chapterNum: number }[] {
   const markers: { lineIdx: number; title: string; chapterNum: number }[] = []
   
-  // Find where actual content starts (after TOC)
-  // Look for first long paragraph which indicates prose content
-  let contentStart = 50  // Default: skip at least first 50 lines
+  console.log(`  Strategy 3: Looking for topic-based TOC...`)
   
-  for (let i = 30; i < Math.min(500, lines.length); i++) {
-    const line = lines[i].trim()
-    if (line.length > 150) {
-      contentStart = Math.max(i - 30, 30)  // Start a bit before the prose
-      break
-    }
-  }
+  // Step 1: Find TOC area and extract chapter titles
+  // TOC usually has short lines with chapter names like "Dust", "Apprentice to Jesus", "Goal #1: Be with Jesus"
+  const tocTitles: string[] = []
+  let tocStart = -1
+  let tocEnd = -1
   
-  console.log(`  Strategy 3: Scanning from line ${contentStart} (skipping TOC)...`)
-  
-  // Track found titles to avoid duplicates
-  const foundTitles = new Set<string>()
-  
-  // Specific patterns for "Practicing the Way" style books
-  // More flexible patterns - match at start of line, not requiring exact end
-  const chapterPatterns = [
-    // "Goal #1: Be with Jesus", "Goal #2: Become like him", "Goal #3: Do as he did"
-    // Match "Goal" followed by number anywhere
-    { regex: /^Goal\s*#?\s*[123]/i, name: 'Goal', normalize: (s: string) => s.match(/Goal\s*#?\s*[123]/i)?.[0]?.replace(/\s+/g, ' ') || s },
-    // Questions: "How? A Rule of Life"
-    { regex: /^How\?/i, name: 'Question', normalize: () => 'How?' },
-    // Single words - exact match
-    { regex: /^Dust$/i, name: 'Dust', normalize: () => 'Dust' },
-    { regex: /^Extras$/i, name: 'Extras', normalize: () => 'Extras' },
-    // "Apprentice to Jesus" - more flexible, just needs to start with "Apprentice"
-    { regex: /^Apprentice/i, name: 'Apprentice', normalize: () => 'Apprentice' },
-    // "Take up your cross" - more flexible
-    { regex: /^Take\s*up/i, name: 'Take up', normalize: () => 'Take up' },
-  ]
-  
-  // Scan the document (skipping TOC area)
-  for (let i = contentStart; i < lines.length; i++) {
+  // Look for TOC by finding a cluster of short lines (chapter titles)
+  for (let i = 50; i < Math.min(300, lines.length); i++) {
     const line = lines[i].trim()
     
-    // Skip empty or too short lines
-    if (line.length < 3) continue
+    // Check if this looks like a chapter title line
+    const isChapterTitle = 
+      line.length > 3 && line.length < 40 &&
+      /^[A-Z]/.test(line) &&
+      !line.includes('©') && !line.includes('ISBN') && !line.includes('www.') &&
+      !/^\d{4}/.test(line) && // Not a year
+      !line.toLowerCase().includes('copyright')
     
-    // Skip lines starting lowercase or with quotes
-    if (/^[a-z"]/.test(line)) continue
-    
-    // Skip very long lines (prose text)
-    if (line.length > 60) continue
-    
-    // Check against chapter patterns
-    let matchedPattern: typeof chapterPatterns[0] | null = null
-    
-    for (const pattern of chapterPatterns) {
-      if (pattern.regex.test(line)) {
-        matchedPattern = pattern
-        break
+    if (isChapterTitle) {
+      // Check if we're in a cluster of short lines (TOC pattern)
+      let shortLineCount = 0
+      for (let j = Math.max(0, i - 3); j <= Math.min(lines.length - 1, i + 3); j++) {
+        const nearby = lines[j].trim()
+        if (nearby.length > 3 && nearby.length < 50 && /^[A-Z]/.test(nearby)) {
+          shortLineCount++
+        }
+      }
+      
+      if (shortLineCount >= 4 && tocStart === -1) {
+        tocStart = i
+      }
+      
+      if (tocStart !== -1 && tocEnd === -1) {
+        // Check for known chapter patterns
+        const isKnownChapter = 
+          /^Dust$/i.test(line) ||
+          /^Apprentice/i.test(line) ||
+          /^Goal\s*#?\d/i.test(line) ||
+          /^How\?/i.test(line) ||
+          /^Take\s*up/i.test(line) ||
+          /^Extras$/i.test(line) ||
+          /^Prologue$/i.test(line) ||
+          /^Epilogue$/i.test(line)
+        
+        if (isKnownChapter) {
+          tocTitles.push(line)
+          console.log(`    TOC entry: "${line}"`)
+        }
       }
     }
     
-    if (!matchedPattern) continue
-    
-    // Normalize the title for deduplication
-    const normalizedTitle = matchedPattern.normalize(line)
-    
-    // Skip if we've already found this chapter
-    if (foundTitles.has(normalizedTitle.toLowerCase())) {
-      console.log(`    Skipping duplicate: "${line}" (already found ${normalizedTitle})`)
-      continue
-    }
-    
-    // Check context: should look like a chapter heading
-    // More relaxed check - just make sure it's not in the middle of a paragraph
-    const prevLine = lines[i - 1]?.trim() || ''
-    const nextLine = lines[i + 1]?.trim() || ''
-    
-    // Bad indicators: surrounded by long prose lines
-    const inMiddleOfParagraph = prevLine.length > 80 && nextLine.length > 80
-    
-    if (!inMiddleOfParagraph) {
-      foundTitles.add(normalizedTitle.toLowerCase())
-      markers.push({ lineIdx: i, title: line, chapterNum: markers.length + 1 })
-      console.log(`    Found (${matchedPattern.name}): "${line}" at line ${i}`)
+    // End TOC when we hit long prose or end patterns
+    if (tocStart !== -1 && tocEnd === -1) {
+      if (line.length > 100 || /^OceanofPDF/i.test(line) || /^"Come,/i.test(line)) {
+        tocEnd = i
+        break
+      }
     }
   }
   
-  // Log what we found
-  if (markers.length < 2) {
-    console.log(`  Only found ${markers.length} chapters, need at least 2`)
+  if (tocTitles.length < 3) {
+    console.log(`  Only found ${tocTitles.length} TOC entries, not enough`)
     return []
   }
   
-  // Sort by position and filter out chapters too close together
-  markers.sort((a, b) => a.lineIdx - b.lineIdx)
-  const filteredMarkers: typeof markers = []
-  for (const marker of markers) {
-    const tooClose = filteredMarkers.some(m => Math.abs(m.lineIdx - marker.lineIdx) < 30)
-    if (!tooClose) {
-      filteredMarkers.push(marker)
+  console.log(`  Found ${tocTitles.length} chapter titles in TOC (lines ${tocStart}-${tocEnd})`)
+  
+  // Step 2: Find where these chapters actually START in the main content
+  // Content starts after the TOC/frontmatter
+  const contentStart = Math.max(tocEnd + 10, 150)
+  const foundTitles = new Set<string>()
+  
+  for (const tocTitle of tocTitles) {
+    const normalizedTocTitle = tocTitle.toLowerCase().trim()
+    
+    // Search for this title in the main content
+    for (let i = contentStart; i < lines.length; i++) {
+      const line = lines[i].trim()
+      const normalizedLine = line.toLowerCase().trim()
+      
+      // Check for exact or near-exact match
+      if (normalizedLine === normalizedTocTitle || line === tocTitle) {
+        // Make sure it looks like a chapter heading (sparse context)
+        const prevLine = lines[i - 1]?.trim() || ''
+        const nextLine = lines[i + 1]?.trim() || ''
+        
+        const looksLikeHeading = 
+          (prevLine.length === 0 || prevLine.length < 30) ||
+          (nextLine.length === 0 || nextLine.length < 50)
+        
+        if (looksLikeHeading && !foundTitles.has(normalizedTocTitle)) {
+          foundTitles.add(normalizedTocTitle)
+          markers.push({ lineIdx: i, title: tocTitle, chapterNum: markers.length + 1 })
+          console.log(`    Found chapter: "${tocTitle}" at line ${i}`)
+          break
+        }
+      }
     }
   }
   
-  // Re-number sequentially
+  if (markers.length < 2) {
+    console.log(`  Only found ${markers.length} chapters in content, need at least 2`)
+    return []
+  }
+  
+  // Sort by position and re-number
+  markers.sort((a, b) => a.lineIdx - b.lineIdx)
   let num = 1
-  for (const marker of filteredMarkers) {
+  for (const marker of markers) {
     marker.chapterNum = num
     marker.title = `${num}. ${marker.title}`
     num++
   }
   
-  console.log(`  Found ${filteredMarkers.length} topic-based chapters`)
-  return filteredMarkers
+  console.log(`  Found ${markers.length} topic-based chapters`)
+  return markers
 }
 
 /**
