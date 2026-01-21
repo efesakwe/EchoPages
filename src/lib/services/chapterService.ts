@@ -426,13 +426,22 @@ function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: stri
           // Must look like a heading:
           // - Preceded by empty/short line, page marker, or footnote marker  
           // - The line itself should be short (heading, not prose)
-          // - Not preceded by a long prose line (which would indicate it's part of a sentence)
+          // - Followed by content (check next few lines for actual prose)
           const prevIsTransition = prev.length === 0 || prev.length < 40 || 
                                    /^OceanofPDF/i.test(prev) || /^\[\d+\]$/.test(prev)
           const lineIsShort = rawLine.length < 50
-          const nextHasContent = next.length > 30  // Followed by actual content
           
-          if (prevIsTransition && lineIsShort && nextHasContent) {
+          // Check next few lines for content (some chapters start with short lines)
+          let hasContentNearby = false
+          for (let k = 1; k <= 3; k++) {
+            const checkLine = lines[i + k]?.trim() || ''
+            if (checkLine.length > 20 && !/^OceanofPDF/i.test(checkLine) && !/^\[\d+\]$/.test(checkLine)) {
+              hasContentNearby = true
+              break
+            }
+          }
+          
+          if (prevIsTransition && lineIsShort && hasContentNearby) {
             markers.push({ lineIdx: i, title: chapter.title, chapterNum: markers.length + 1 })
             console.log(`    Found "${chapter.title}" at line ${i} (matched: "${term}")`)
             found = true
@@ -453,12 +462,12 @@ function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: stri
     return []
   }
   
-  // Sort by position and re-number
+  // Sort by position and re-number (but DON'T add number prefix - UI does that)
   markers.sort((a, b) => a.lineIdx - b.lineIdx)
   let num = 1
   for (const marker of markers) {
     marker.chapterNum = num
-    marker.title = `${num}. ${marker.title}`
+    // Don't add "N. " prefix - the UI already displays chapter numbers
     num++
   }
   

@@ -118,9 +118,18 @@ function findTopicBasedChapters(lines) {
           const prevIsTransition = prev.length === 0 || prev.length < 40 || 
                                    /^OceanofPDF/i.test(prev) || /^\[\d+\]$/.test(prev)
           const lineIsShort = rawLine.length < 50
-          const nextHasContent = next.length > 30
           
-          if (prevIsTransition && lineIsShort && nextHasContent) {
+          // Check next few lines for content (some chapters start with short lines)
+          let hasContentNearby = false
+          for (let k = 1; k <= 3; k++) {
+            const checkLine = lines[i + k]?.trim() || ''
+            if (checkLine.length > 20 && !/^OceanofPDF/i.test(checkLine) && !/^\[\d+\]$/.test(checkLine)) {
+              hasContentNearby = true
+              break
+            }
+          }
+          
+          if (prevIsTransition && lineIsShort && hasContentNearby) {
             markers.push({ lineIdx: i, title: chapter.title, chapterNum: markers.length + 1 })
             console.log(`    Found "${chapter.title}" at line ${i} (matched: "${term}")`)
             found = true
@@ -140,7 +149,7 @@ function findTopicBasedChapters(lines) {
   let num = 1
   for (const marker of markers) {
     marker.chapterNum = num
-    marker.title = `${num}. ${marker.title}`
+    // Don't add number prefix - UI does that
     num++
   }
   
