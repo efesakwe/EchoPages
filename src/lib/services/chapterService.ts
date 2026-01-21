@@ -75,7 +75,7 @@ export async function detectChapters(
 
 /**
  * Find TOC and extract chapter entries
- * Supports multiple TOC styles:
+* Supports multiple TOC styles:
  * 1. Numbered POV: "1. CASEY", "2. DYLAN" (all caps character names)
  * 2. Topic-based: "Dust", "Apprentice to Jesus", "Goal #1: Be with Jesus"
  */
@@ -509,20 +509,26 @@ function scanForChapterMarkers(lines: string[], startLine: number): { lineIdx: n
       continue
     }
     
-    // Check for standalone digits (1, 2, 3...)
+    // Check for standalone digits (1, 2, 3... up to 30)
+    // Skip high numbers (likely footnotes/endnotes)
     if (/^\d{1,2}$/.test(line)) {
       const num = parseInt(line)
-      const nextLine = lines[i + 1]?.trim() || ''
-      // Must be followed by content, not another number
-      if (nextLine.length > 20 && !/^\d{1,2}$/.test(nextLine)) {
-        markers.push({ lineIdx: i, title: `Chapter ${num}`, chapterNum: num })
-        console.log(`  Found: Chapter ${num} (digit) at line ${i}`)
+      // Only accept reasonable chapter numbers (1-30)
+      if (num >= 1 && num <= 30) {
+        const nextLine = lines[i + 1]?.trim() || ''
+        const prevLine = lines[i - 1]?.trim() || ''
+        // Must be preceded by empty line and followed by content, not another number
+        if (prevLine.length === 0 && nextLine.length > 20 && !/^\d{1,2}$/.test(nextLine)) {
+          markers.push({ lineIdx: i, title: `Chapter ${num}`, chapterNum: num })
+          console.log(`  Found: Chapter ${num} (digit) at line ${i}`)
+        }
       }
     }
     
     // Check for "1. NAME" or "1. CHARACTERNAME" format (numbered POV chapters)
-    // Pattern: number + period + space + word(s)
-    const numberedNameMatch = line.match(/^(\d{1,2})\.\s*([A-Za-z][A-Za-z\s]+)$/i)
+    // STRICT: Only match ALL CAPS names (1-3 words) like "1. CASEY" or "1. MARY JANE"
+    // This prevents matching numbered subsections like "1. To be with your rabbi"
+    const numberedNameMatch = line.match(/^(\d{1,2})\.\s*([A-Z]{2,}(?:\s+[A-Z]{2,}){0,2})$/)
     if (numberedNameMatch) {
       const num = parseInt(numberedNameMatch[1])
       const name = numberedNameMatch[2].trim()
@@ -531,11 +537,10 @@ function scanForChapterMarkers(lines: string[], startLine: number): { lineIdx: n
       const nextNextNextLine = lines[i + 3]?.trim() || ''
       
       // Check if we're still in TOC (multiple consecutive numbered entries)
-      // Look at next 3 lines - if 2+ are also numbered entries, we're likely in TOC
       let numberedEntryCount = 0
       for (let j = 1; j <= 3; j++) {
         const checkLine = lines[i + j]?.trim() || ''
-        if (/^\d{1,2}\.\s*[A-Za-z]/.test(checkLine)) {
+        if (/^\d{1,2}\.\s*[A-Z]{2,}/.test(checkLine)) {
           numberedEntryCount++
         }
       }
@@ -549,7 +554,7 @@ function scanForChapterMarkers(lines: string[], startLine: number): { lineIdx: n
         
         if (hasContent) {
           markers.push({ lineIdx: i, title: `${num}. ${name}`, chapterNum: num })
-          console.log(`  Found: ${num}. ${name} (numbered name) at line ${i}`)
+          console.log(`  Found: ${num}. ${name} (numbered POV) at line ${i}`)
         }
       } else {
         console.log(`  Skipped: ${num}. ${name} at line ${i} (likely TOC entry)`)
