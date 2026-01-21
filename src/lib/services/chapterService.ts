@@ -278,81 +278,112 @@ function findMarkersFromTOC(lines: string[], tocEntries: Array<{ number: number;
  */
 function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: string; chapterNum: number }[] {
   const markers: { lineIdx: number; title: string; chapterNum: number }[] = []
-  const contentStart = findContentStart(lines)
   
-  console.log(`  Strategy 3: Scanning from line ${contentStart} for topic-based patterns...`)
+  // Skip TOC area - start scanning after line 200 to avoid TOC matches
+  const tocEndGuess = Math.min(300, lines.length)
+  let contentStart = tocEndGuess
+  
+  // Find where actual content starts (first long paragraph after TOC)
+  for (let i = 100; i < Math.min(500, lines.length); i++) {
+    const line = lines[i].trim()
+    if (line.length > 150) {
+      contentStart = Math.max(i - 20, 100)  // Start a bit before the prose
+      break
+    }
+  }
+  
+  console.log(`  Strategy 3: Scanning from line ${contentStart} (skipping TOC)...`)
+  
+  // Track found titles to avoid duplicates
+  const foundTitles = new Set<string>()
   
   // Specific patterns for "Practicing the Way" style books
-  // Be VERY specific to avoid matching random words/sentences
   const chapterPatterns = [
-    // "Goal #1: Be with Jesus", "Goal #2: Become like him", "Goal #3: Do as he did"
-    { regex: /^Goal\s*#\d+:/i, name: 'Goal' },
-    // Questions: "How? A Rule of Life" (must have text after ?)
-    { regex: /^How\?\s+[A-Z]/i, name: 'Question' },
-    // ONLY these specific single words (known chapter titles)
-    { regex: /^(Dust|Extras|Prologue|Epilogue|Introduction|Conclusion)$/i, name: 'Special Section' },
-    // "Apprentice to Jesus" - must be EXACTLY this or similar full title
-    { regex: /^Apprentice to Jesus$/i, name: 'Apprentice' },
-    // "Take up your cross" - must be full phrase
-    { regex: /^Take up your cross$/i, name: 'Take up' },
+    // "Goal #1: Be with Jesus" - EXACT format, short title only
+    { regex: /^Goal #\d: [A-Z][a-z]+ [a-z]+ [A-Za-z]+$/i, name: 'Goal', normalize: (s: string) => s.match(/Goal #\d/i)?.[0] || s },
+    // Questions: "How? A Rule of Life" - EXACT
+    { regex: /^How\? A Rule of Life$/i, name: 'Question', normalize: (s: string) => 'How? A Rule of Life' },
+    // Single words - EXACT
+    { regex: /^Dust$/i, name: 'Dust', normalize: () => 'Dust' },
+    { regex: /^Extras$/i, name: 'Extras', normalize: () => 'Extras' },
+    // "Apprentice to Jesus" - EXACT
+    { regex: /^Apprentice to Jesus$/i, name: 'Apprentice', normalize: () => 'Apprentice to Jesus' },
+    // "Take up your cross" - EXACT
+    { regex: /^Take up your cross$/i, name: 'Take up', normalize: () => 'Take up your cross' },
   ]
   
-  // Scan the entire document
+  // Scan the document (skipping TOC area)
   for (let i = contentStart; i < lines.length; i++) {
     const line = lines[i].trim()
     
     // Skip empty, too short, or too long lines
-    if (line.length < 3 || line.length > 60) continue
+    if (line.length < 3 || line.length > 35) continue
     
     // Skip lines starting lowercase or with quotes
     if (/^[a-z"]/.test(line)) continue
     
     // Check against chapter patterns
-    let isChapterTitle = false
-    let matchType = ''
+    let matchedPattern: typeof chapterPatterns[0] | null = null
     
     for (const pattern of chapterPatterns) {
       if (pattern.regex.test(line)) {
-        isChapterTitle = true
-        matchType = pattern.name
-        console.log(`    Potential match (${matchType}): "${line}" at line ${i}`)
+        matchedPattern = pattern
         break
       }
     }
     
-    if (!isChapterTitle) continue
+    if (!matchedPattern) continue
     
-    // Looser context check: just make sure there's some content after it
-    let hasContent = false
-    for (let j = i + 1; j < Math.min(lines.length, i + 50); j++) {
-      const nextLine = lines[j].trim()
-      if (nextLine.length > 50) {
-        hasContent = true
-        break
-      }
+    // Normalize the title for deduplication
+    const normalizedTitle = matchedPattern.normalize(line)
+    
+    // Skip if we've already found this chapter
+    if (foundTitles.has(normalizedTitle.toLowerCase())) {
+      console.log(`    Skipping duplicate: "${line}" (already found ${normalizedTitle})`)
+      continue
     }
     
-    if (hasContent) {
-      // Check we haven't already found something too close (within 30 lines)
-      const tooClose = markers.some(m => Math.abs(m.lineIdx - i) < 30)
-      if (!tooClose) {
-        markers.push({ lineIdx: i, title: line, chapterNum: markers.length + 1 })
-        console.log(`  >> Found chapter (${matchType}): "${line}" at line ${i}`)
-      }
+    // Check context: should look like a chapter heading (sparse surroundings)
+    const prevLine = lines[i - 1]?.trim() || ''
+    const nextLine = lines[i + 1]?.trim() || ''
+    
+    // Good indicators: short/empty lines around it
+    const goodContext = (prevLine.length < 30 || prevLine.length === 0) && 
+                        (nextLine.length < 50 || nextLine.length === 0)
+    
+    if (goodContext) {
+      foundTitles.add(normalizedTitle.toLowerCase())
+      markers.push({ lineIdx: i, title: line, chapterNum: markers.length + 1 })
+      console.log(`    Found (${matchedPattern.name}): "${line}" at line ${i}`)
     }
   }
   
-  // Sort by line index and re-number
+  // If we didn't find enough, this strategy failed
+  if (markers.length < 3) {
+    console.log(`  Only found ${markers.length} chapters, Strategy 3 needs at least 3`)
+    return []
+  }
+  
+  // Sort by position and filter out chapters too close together
   markers.sort((a, b) => a.lineIdx - b.lineIdx)
-  let num = 1
+  const filteredMarkers: typeof markers = []
   for (const marker of markers) {
+    const tooClose = filteredMarkers.some(m => Math.abs(m.lineIdx - marker.lineIdx) < 30)
+    if (!tooClose) {
+      filteredMarkers.push(marker)
+    }
+  }
+  
+  // Re-number sequentially
+  let num = 1
+  for (const marker of filteredMarkers) {
     marker.chapterNum = num
     marker.title = `${num}. ${marker.title}`
     num++
   }
   
-  console.log(`  Found ${markers.length} topic-based chapters`)
-  return markers
+  console.log(`  Found ${filteredMarkers.length} topic-based chapters`)
+  return filteredMarkers
 }
 
 /**
