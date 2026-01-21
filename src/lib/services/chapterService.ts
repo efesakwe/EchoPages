@@ -34,10 +34,10 @@ export async function detectChapters(
   const lines = text.split('\n')
   console.log(`Total lines: ${lines.length}`)
   
-  // Strategy 1: Try to find TOC and extract chapter names from it
+  // Strategy 1: Try to find TOC with numbered entries (e.g., "1. CASEY")
   const tocEntries = findTOC(lines)
   if (tocEntries.length > 0) {
-    console.log(`\nFound TOC with ${tocEntries.length} entries`)
+    console.log(`\nFound TOC with ${tocEntries.length} numbered entries`)
     const markersFromTOC = findMarkersFromTOC(lines, tocEntries)
     if (markersFromTOC.length >= 2) {
       console.log(`\nFound ${markersFromTOC.length} chapter markers from TOC`)
@@ -50,7 +50,7 @@ export async function detectChapters(
   }
   
   // Strategy 2: Scan entire document for chapter markers
-  console.log('\n--- Scanning entire document for chapter markers ---')
+  console.log('\n--- Strategy 2: Scanning for standard chapter markers ---')
   const contentStart = findContentStart(lines)
   console.log(`Content starts at line: ${contentStart}`)
   const markers = scanForChapterMarkers(lines, contentStart)
@@ -59,6 +59,18 @@ export async function detectChapters(
     console.log(`\nFound ${markers.length} chapter markers`)
     const chapters = extractChapters(lines, markers)
     
+    if (chapters.length >= 2) {
+      logResults(chapters, text)
+      return chapters
+    }
+  }
+  
+  // Strategy 3: Try topic-based TOC detection (e.g., "Goal #1: Be with Jesus", "Dust")
+  console.log('\n--- Strategy 3: Trying topic-based chapter detection ---')
+  const topicMarkers = findTopicBasedChapters(lines)
+  if (topicMarkers.length >= 2) {
+    console.log(`\nFound ${topicMarkers.length} topic-based chapter markers`)
+    const chapters = extractChapters(lines, topicMarkers)
     if (chapters.length >= 2) {
       logResults(chapters, text)
       return chapters
@@ -221,6 +233,127 @@ function findMarkersFromTOC(lines: string[], tocEntries: Array<{ number: number;
       marker.chapterNum = sequentialNum++
       console.log(`  Renumbered: "${originalTitle}" -> ${marker.title}`)
     }
+  }
+  
+  return markers
+}
+
+/**
+ * Strategy 3: Find topic-based chapters (e.g., "Goal #1: Be with Jesus", "Dust")
+ * This handles books with themed/topic TOCs instead of numbered chapters
+ */
+function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: string; chapterNum: number }[] {
+  const markers: { lineIdx: number; title: string; chapterNum: number }[] = []
+  
+  // First, find the TOC section
+  let tocStart = -1
+  let tocEnd = -1
+  
+  for (let i = 0; i < Math.min(500, lines.length); i++) {
+    const line = lines[i].trim().toLowerCase()
+    if (line.includes('contents') || line.includes('table of contents')) {
+      tocStart = i
+      break
+    }
+  }
+  
+  if (tocStart === -1) {
+    console.log('  No TOC found for topic-based detection')
+    return markers
+  }
+  
+  // Find where TOC ends
+  for (let i = tocStart + 1; i < Math.min(tocStart + 150, lines.length); i++) {
+    const line = lines[i].trim()
+    if (line.length > 120 && !/^\d+\./.test(line)) {
+      tocEnd = i
+      break
+    }
+  }
+  if (tocEnd === -1) tocEnd = Math.min(tocStart + 150, lines.length)
+  
+  console.log(`  TOC found at lines ${tocStart}-${tocEnd}`)
+  
+  // Extract potential chapter titles from TOC
+  // These are topic-based patterns that aren't numbered POV chapters
+  const chapterTitles: string[] = []
+  
+  for (let i = tocStart + 1; i < tocEnd; i++) {
+    const line = lines[i].trim()
+    if (line.length === 0) continue
+    
+    // Skip lines that look like subsections
+    const isSubSection = 
+      line.startsWith('"') || line.startsWith('"') || line.startsWith("'") ||  // Quoted
+      /^[a-z]/.test(line) ||  // Starts lowercase
+      /^\d+\.\s+[A-Z][a-z]/.test(line) ||  // "1. To be with..." numbered subsection
+      line.includes('_') ||  // Italicized
+      line.split(/\s+/).length > 7  // Too long
+    
+    if (isSubSection) continue
+    
+    // Check for chapter-like patterns
+    const isChapterTitle = 
+      /^(Goal|Part|Section)\s*#?\d+/i.test(line) ||  // "Goal #1:", "Part 1"
+      /^(Prologue|Epilogue|Introduction|Conclusion|Preface|Foreword|Afterword)$/i.test(line) ||
+      /^(How|What|Why|When|Where)\?/i.test(line) ||  // Questions
+      /^[A-Z][a-z]+$/.test(line) ||  // Single capitalized word like "Dust"
+      (/^[A-Z]/.test(line) && line.split(/\s+/).length <= 4 && /[A-Z]$/.test(line.split(/\s+/).pop() || ''))  // Short title case
+    
+    if (isChapterTitle) {
+      chapterTitles.push(line)
+      console.log(`  Topic TOC entry: "${line}"`)
+    }
+  }
+  
+  if (chapterTitles.length < 2) {
+    console.log(`  Only found ${chapterTitles.length} topic entries, not enough`)
+    return markers
+  }
+  
+  // Now find these titles in the main text
+  const contentStart = findContentStart(lines)
+  const usedLines = new Set<number>()
+  
+  for (const title of chapterTitles) {
+    const simplifiedTitle = title.replace(/[^\w\s]/g, '').toLowerCase().trim()
+    
+    for (let i = contentStart; i < lines.length; i++) {
+      if (usedLines.has(i)) continue
+      
+      const line = lines[i].trim()
+      if (line.length === 0 || line.length > 100) continue
+      
+      const simplifiedLine = line.replace(/[^\w\s]/g, '').toLowerCase().trim()
+      
+      // Check for match
+      if (simplifiedLine === simplifiedTitle || line === title) {
+        const prevLine = lines[i - 1]?.trim() || ''
+        const nextLine = lines[i + 1]?.trim() || ''
+        const nextNextLine = lines[i + 2]?.trim() || ''
+        
+        // Verify it looks like a chapter heading
+        const validContext = 
+          (prevLine.length === 0 || prevLine.length < 40) &&
+          (nextLine.length > 20 || (nextLine.length === 0 && nextNextLine.length > 20) || nextLine.length < 30)
+        
+        if (validContext) {
+          markers.push({ lineIdx: i, title: title, chapterNum: markers.length + 1 })
+          usedLines.add(i)
+          console.log(`  Found topic marker: "${title}" at line ${i}`)
+          break
+        }
+      }
+    }
+  }
+  
+  // Re-number sequentially
+  markers.sort((a, b) => a.lineIdx - b.lineIdx)
+  let num = 1
+  for (const marker of markers) {
+    marker.chapterNum = num
+    marker.title = `${num}. ${marker.title}`
+    num++
   }
   
   return markers
