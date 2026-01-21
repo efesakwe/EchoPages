@@ -279,15 +279,14 @@ function findMarkersFromTOC(lines: string[], tocEntries: Array<{ number: number;
 function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: string; chapterNum: number }[] {
   const markers: { lineIdx: number; title: string; chapterNum: number }[] = []
   
-  // Skip TOC area - start scanning after line 200 to avoid TOC matches
-  const tocEndGuess = Math.min(300, lines.length)
-  let contentStart = tocEndGuess
+  // Find where actual content starts (after TOC)
+  // Look for first long paragraph which indicates prose content
+  let contentStart = 50  // Default: skip at least first 50 lines
   
-  // Find where actual content starts (first long paragraph after TOC)
-  for (let i = 100; i < Math.min(500, lines.length); i++) {
+  for (let i = 30; i < Math.min(500, lines.length); i++) {
     const line = lines[i].trim()
     if (line.length > 150) {
-      contentStart = Math.max(i - 20, 100)  // Start a bit before the prose
+      contentStart = Math.max(i - 30, 30)  // Start a bit before the prose
       break
     }
   }
@@ -298,18 +297,19 @@ function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: stri
   const foundTitles = new Set<string>()
   
   // Specific patterns for "Practicing the Way" style books
+  // More flexible patterns that handle slight formatting variations
   const chapterPatterns = [
-    // "Goal #1: Be with Jesus" - EXACT format, short title only
-    { regex: /^Goal #\d: [A-Z][a-z]+ [a-z]+ [A-Za-z]+$/i, name: 'Goal', normalize: (s: string) => s.match(/Goal #\d/i)?.[0] || s },
-    // Questions: "How? A Rule of Life" - EXACT
-    { regex: /^How\? A Rule of Life$/i, name: 'Question', normalize: (s: string) => 'How? A Rule of Life' },
-    // Single words - EXACT
+    // "Goal #1: Be with Jesus", "Goal #2: Become like him", "Goal #3: Do as he did"
+    { regex: /^Goal\s*#?\s*\d\s*[:\-]?\s*[A-Z]/i, name: 'Goal', normalize: (s: string) => s.match(/Goal\s*#?\s*\d/i)?.[0]?.replace(/\s+/g, ' ') || s },
+    // Questions: "How? A Rule of Life"
+    { regex: /^How\?/i, name: 'Question', normalize: () => 'How?' },
+    // Single words
     { regex: /^Dust$/i, name: 'Dust', normalize: () => 'Dust' },
     { regex: /^Extras$/i, name: 'Extras', normalize: () => 'Extras' },
-    // "Apprentice to Jesus" - EXACT
-    { regex: /^Apprentice to Jesus$/i, name: 'Apprentice', normalize: () => 'Apprentice to Jesus' },
-    // "Take up your cross" - EXACT
-    { regex: /^Take up your cross$/i, name: 'Take up', normalize: () => 'Take up your cross' },
+    // "Apprentice to Jesus"
+    { regex: /^Apprentice\s+to\s+Jesus$/i, name: 'Apprentice', normalize: () => 'Apprentice to Jesus' },
+    // "Take up your cross"
+    { regex: /^Take\s+up\s+your\s+cross$/i, name: 'Take up', normalize: () => 'Take up your cross' },
   ]
   
   // Scan the document (skipping TOC area)
@@ -317,7 +317,7 @@ function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: stri
     const line = lines[i].trim()
     
     // Skip empty, too short, or too long lines
-    if (line.length < 3 || line.length > 35) continue
+    if (line.length < 3 || line.length > 50) continue
     
     // Skip lines starting lowercase or with quotes
     if (/^[a-z"]/.test(line)) continue
@@ -343,24 +343,24 @@ function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: stri
       continue
     }
     
-    // Check context: should look like a chapter heading (sparse surroundings)
+    // Check context: should look like a chapter heading
+    // More relaxed check - just make sure it's not in the middle of a paragraph
     const prevLine = lines[i - 1]?.trim() || ''
     const nextLine = lines[i + 1]?.trim() || ''
     
-    // Good indicators: short/empty lines around it
-    const goodContext = (prevLine.length < 30 || prevLine.length === 0) && 
-                        (nextLine.length < 50 || nextLine.length === 0)
+    // Bad indicators: surrounded by long prose lines
+    const inMiddleOfParagraph = prevLine.length > 80 && nextLine.length > 80
     
-    if (goodContext) {
+    if (!inMiddleOfParagraph) {
       foundTitles.add(normalizedTitle.toLowerCase())
       markers.push({ lineIdx: i, title: line, chapterNum: markers.length + 1 })
       console.log(`    Found (${matchedPattern.name}): "${line}" at line ${i}`)
     }
   }
   
-  // If we didn't find enough, this strategy failed
-  if (markers.length < 3) {
-    console.log(`  Only found ${markers.length} chapters, Strategy 3 needs at least 3`)
+  // Log what we found
+  if (markers.length < 2) {
+    console.log(`  Only found ${markers.length} chapters, need at least 2`)
     return []
   }
   
