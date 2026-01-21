@@ -30,6 +30,13 @@ if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
 
 console.log('[OK] Environment variables loaded successfully')
 
+// Log performance settings
+const workerConcurrency = parseInt(process.env.WORKER_CONCURRENCY || '3', 10)
+const ttsBatchSize = parseInt(process.env.TTS_BATCH_SIZE || '5', 10)
+console.log(`[PERFORMANCE] Worker concurrency: ${workerConcurrency} chapters simultaneously`)
+console.log(`[PERFORMANCE] Chunk batch size: ${ttsBatchSize} chunks per batch`)
+console.log(`[PERFORMANCE] Set WORKER_CONCURRENCY and TTS_BATCH_SIZE env vars to adjust speed`)
+
 import { Worker, ConnectionOptions } from 'bullmq'
 import Redis from 'ioredis'
 import { createServiceClient } from './lib/supabase'
@@ -336,8 +343,10 @@ const worker = new Worker(
       }
     }
 
-    // Process chunks in parallel batches (3 at a time to avoid rate limits)
-    const BATCH_SIZE = 3
+    // Process chunks in parallel batches (configurable to balance speed vs rate limits)
+    // Higher batch size = faster but may hit rate limits
+    // Lower batch size = slower but safer for rate limits
+    const BATCH_SIZE = parseInt(process.env.TTS_BATCH_SIZE || '5', 10)
     for (let i = 0; i < chunksToProcess.length; i += BATCH_SIZE) {
       const batch = chunksToProcess.slice(i, i + BATCH_SIZE)
       console.log(`\nProcessing batch ${Math.floor(i / BATCH_SIZE) + 1} (chunks ${i + 1}-${Math.min(i + BATCH_SIZE, chunksToProcess.length)})`)
@@ -370,7 +379,10 @@ const worker = new Worker(
   },
   {
     connection: redis as unknown as ConnectionOptions,
-    concurrency: 1, // Process one chapter at a time
+    // Process multiple chapters simultaneously for faster generation
+    // Higher concurrency = faster but more API calls simultaneously
+    // Set via WORKER_CONCURRENCY env var (default: 3)
+    concurrency: parseInt(process.env.WORKER_CONCURRENCY || '3', 10),
   }
 )
 
