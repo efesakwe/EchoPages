@@ -49,10 +49,10 @@ export async function detectChapters(
   // This avoids picking up subsections like "1. To be with your rabbi" as chapters
   console.log('\n--- Strategy 3: Trying topic-based chapter detection FIRST ---')
   const topicMarkers = findTopicBasedChapters(lines)
-  if (topicMarkers.length >= 3) {
+  if (topicMarkers.length >= 2) {
     console.log(`\nFound ${topicMarkers.length} topic-based chapter markers - using these!`)
     const chapters = extractChapters(lines, topicMarkers)
-    if (chapters.length >= 3) {
+    if (chapters.length >= 2) {
       logResults(chapters, text)
       return chapters
     }
@@ -297,30 +297,34 @@ function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: stri
   const foundTitles = new Set<string>()
   
   // Specific patterns for "Practicing the Way" style books
-  // More flexible patterns that handle slight formatting variations
+  // More flexible patterns - match at start of line, not requiring exact end
   const chapterPatterns = [
     // "Goal #1: Be with Jesus", "Goal #2: Become like him", "Goal #3: Do as he did"
-    { regex: /^Goal\s*#?\s*\d\s*[:\-]?\s*[A-Z]/i, name: 'Goal', normalize: (s: string) => s.match(/Goal\s*#?\s*\d/i)?.[0]?.replace(/\s+/g, ' ') || s },
+    // Match "Goal" followed by number anywhere
+    { regex: /^Goal\s*#?\s*[123]/i, name: 'Goal', normalize: (s: string) => s.match(/Goal\s*#?\s*[123]/i)?.[0]?.replace(/\s+/g, ' ') || s },
     // Questions: "How? A Rule of Life"
     { regex: /^How\?/i, name: 'Question', normalize: () => 'How?' },
-    // Single words
+    // Single words - exact match
     { regex: /^Dust$/i, name: 'Dust', normalize: () => 'Dust' },
     { regex: /^Extras$/i, name: 'Extras', normalize: () => 'Extras' },
-    // "Apprentice to Jesus"
-    { regex: /^Apprentice\s+to\s+Jesus$/i, name: 'Apprentice', normalize: () => 'Apprentice to Jesus' },
-    // "Take up your cross"
-    { regex: /^Take\s+up\s+your\s+cross$/i, name: 'Take up', normalize: () => 'Take up your cross' },
+    // "Apprentice to Jesus" - more flexible, just needs to start with "Apprentice"
+    { regex: /^Apprentice/i, name: 'Apprentice', normalize: () => 'Apprentice' },
+    // "Take up your cross" - more flexible
+    { regex: /^Take\s*up/i, name: 'Take up', normalize: () => 'Take up' },
   ]
   
   // Scan the document (skipping TOC area)
   for (let i = contentStart; i < lines.length; i++) {
     const line = lines[i].trim()
     
-    // Skip empty, too short, or too long lines
-    if (line.length < 3 || line.length > 50) continue
+    // Skip empty or too short lines
+    if (line.length < 3) continue
     
     // Skip lines starting lowercase or with quotes
     if (/^[a-z"]/.test(line)) continue
+    
+    // Skip very long lines (prose text)
+    if (line.length > 60) continue
     
     // Check against chapter patterns
     let matchedPattern: typeof chapterPatterns[0] | null = null
