@@ -283,17 +283,18 @@ function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: stri
   console.log(`  Strategy 3: Scanning from line ${contentStart} for topic-based patterns...`)
   
   // Specific patterns for "Practicing the Way" style books
+  // Be VERY specific to avoid matching random words/sentences
   const chapterPatterns = [
     // "Goal #1: Be with Jesus", "Goal #2: Become like him", "Goal #3: Do as he did"
-    { regex: /^Goal\s*#?\d/i, name: 'Goal' },
-    // Questions: "How? A Rule of Life"
-    { regex: /^How\?/i, name: 'Question' },
-    // Single capitalized word (3-15 chars): "Dust", "Extras"
-    { regex: /^[A-Z][a-z]{2,14}$/, name: 'Single Word' },
-    // "Apprentice to Jesus" pattern
-    { regex: /^Apprentice/i, name: 'Apprentice' },
-    // "Take up your cross" pattern  
-    { regex: /^Take up/i, name: 'Take up' },
+    { regex: /^Goal\s*#\d+:/i, name: 'Goal' },
+    // Questions: "How? A Rule of Life" (must have text after ?)
+    { regex: /^How\?\s+[A-Z]/i, name: 'Question' },
+    // ONLY these specific single words (known chapter titles)
+    { regex: /^(Dust|Extras|Prologue|Epilogue|Introduction|Conclusion)$/i, name: 'Special Section' },
+    // "Apprentice to Jesus" - must be EXACTLY this or similar full title
+    { regex: /^Apprentice to Jesus$/i, name: 'Apprentice' },
+    // "Take up your cross" - must be full phrase
+    { regex: /^Take up your cross$/i, name: 'Take up' },
   ]
   
   // Scan the entire document
