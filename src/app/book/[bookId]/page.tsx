@@ -340,10 +340,8 @@ export default async function BookDetailPage({
                             className="flex-1"
                           >
                             <span className="text-sm font-medium text-black">
-                              {/* Don't double-number chapters that already have numbers in title */}
-                              {/^(Goal\s*#?\d|Chapter\s*\d|\d+\.)/i.test(chapterTitle) 
-                                ? chapterTitle 
-                                : `${chapter.idx + 1}. ${chapterTitle}`}
+                              {/* Show clean chapter titles - no automatic numbering */}
+                              {chapterTitle}
                             </span>
                             <span className="text-xs text-gray-500 ml-2">
                               ({wordCount.toLocaleString()} words)
