@@ -281,30 +281,43 @@ function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: stri
   
   console.log(`  Strategy 3: Looking for topic-based TOC...`)
   
-  // Step 1: Find TOC area and extract chapter titles
-  // TOC usually has short lines with chapter names like "Dust", "Apprentice to Jesus", "Goal #1: Be with Jesus"
+  // Step 1: Find TOC area and extract ALL titles (both chapters and subsections)
   const tocTitles: string[] = []
   let tocStart = -1
   let tocEnd = -1
   
-  // Look for TOC by finding a cluster of short lines (chapter titles)
+  // Look for TOC by finding a cluster of short lines
   for (let i = 50; i < Math.min(300, lines.length); i++) {
     const line = lines[i].trim()
+    const lower = line.toLowerCase()
     
-    // Check if this looks like a chapter title line
-    const isChapterTitle = 
-      line.length > 3 && line.length < 40 &&
-      /^[A-Z]/.test(line) &&
-      !line.includes('©') && !line.includes('ISBN') && !line.includes('www.') &&
-      !/^\d{4}/.test(line) && // Not a year
-      !line.toLowerCase().includes('copyright')
+    // Skip publication/copyright info lines
+    const isPublishingInfo = 
+      lower.includes('penguin') || lower.includes('random house') ||
+      lower.includes('congress') || lower.includes('library of') ||
+      lower.includes('isbn') || lower.includes('lccn') ||
+      lower.includes('copyright') || lower.includes('design') ||
+      lower.includes('published') || lower.includes('author') ||
+      lower.includes('trademark') || lower.includes('permission') ||
+      lower.includes('.com') || lower.includes('www.') ||
+      lower.includes('©') || /^\d{4}/.test(line) ||
+      lower.includes('edition') || lower.includes('cover') ||
+      /^names?:/i.test(line) || /^title:/i.test(line)
     
-    if (isChapterTitle) {
+    if (isPublishingInfo) continue
+    
+    // Check if this looks like a TOC entry
+    const isTocEntry = 
+      line.length > 3 && line.length < 60 &&
+      /^[A-Z"]/.test(line) &&  // Starts with capital or quote
+      !line.toLowerCase().includes('oceanofpdf')
+    
+    if (isTocEntry) {
       // Check if we're in a cluster of short lines (TOC pattern)
       let shortLineCount = 0
       for (let j = Math.max(0, i - 3); j <= Math.min(lines.length - 1, i + 3); j++) {
         const nearby = lines[j].trim()
-        if (nearby.length > 3 && nearby.length < 50 && /^[A-Z]/.test(nearby)) {
+        if (nearby.length > 3 && nearby.length < 60 && /^[A-Z"]/.test(nearby)) {
           shortLineCount++
         }
       }
@@ -314,28 +327,27 @@ function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: stri
       }
       
       if (tocStart !== -1 && tocEnd === -1) {
-        // Check for known chapter patterns
-        const isKnownChapter = 
-          /^Dust$/i.test(line) ||
-          /^Apprentice/i.test(line) ||
-          /^Goal\s*#?\d/i.test(line) ||
-          /^How\?/i.test(line) ||
-          /^Take\s*up/i.test(line) ||
-          /^Extras$/i.test(line) ||
-          /^Prologue$/i.test(line) ||
-          /^Epilogue$/i.test(line)
-        
-        if (isKnownChapter) {
+        // Collect ALL TOC entries (both main chapters and subsections)
+        // Exclude items that look like metadata
+        if (!line.toLowerCase().includes('notes') && 
+            !line.toLowerCase().includes('gratitude') &&
+            !/^The\s+(nine|practicing)/i.test(line)) {
           tocTitles.push(line)
           console.log(`    TOC entry: "${line}"`)
         }
       }
     }
     
-    // End TOC when we hit long prose or end patterns
+    // End TOC when we hit long prose, page markers, or "Notes"
     if (tocStart !== -1 && tocEnd === -1) {
-      if (line.length > 100 || /^OceanofPDF/i.test(line) || /^"Come,/i.test(line)) {
+      const lower = line.toLowerCase()
+      if (line.length > 100 || 
+          /^OceanofPDF/i.test(line) || 
+          /^"Come,/i.test(line) ||
+          lower === 'notes' ||
+          lower === 'gratitude') {
         tocEnd = i
+        console.log(`  TOC ends at line ${i} ("${line.substring(0, 30)}...")`)
         break
       }
     }
@@ -346,7 +358,7 @@ function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: stri
     return []
   }
   
-  console.log(`  Found ${tocTitles.length} chapter titles in TOC (lines ${tocStart}-${tocEnd})`)
+  console.log(`  Found ${tocTitles.length} entries in TOC (lines ${tocStart}-${tocEnd})`)
   
   // Step 2: Find where the Notes/References section starts (to avoid it)
   let notesStart = lines.length
@@ -360,43 +372,55 @@ function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: stri
     }
   }
   
-  // Step 3: Find where these chapters actually START in the main content
-  // Content starts after the TOC/frontmatter, but BEFORE the Notes section
+  // Step 3: Find where these sections actually START in the main content
   const contentStart = Math.max(tocEnd + 10, 150)
-  const contentEnd = notesStart - 50  // Stop well before Notes
+  const contentEnd = notesStart - 50
   const foundTitles = new Set<string>()
   
-  console.log(`  Searching for chapters between lines ${contentStart} and ${contentEnd}`)
+  console.log(`  Searching for sections between lines ${contentStart} and ${contentEnd}`)
   
   for (const tocTitle of tocTitles) {
     const normalizedTocTitle = tocTitle.toLowerCase().trim()
+    // Remove quotes for matching
+    const cleanTocTitle = normalizedTocTitle.replace(/^[""]|[""]$/g, '')
     
-    // Search for this title in the main content (NOT in Notes section)
+    // Search for this title in the main content
     for (let i = contentStart; i < contentEnd; i++) {
       const line = lines[i].trim()
       const normalizedLine = line.toLowerCase().trim()
+      const cleanLine = normalizedLine.replace(/^[""]|[""]$/g, '')
       
       // Check for exact or near-exact match
-      if (normalizedLine === normalizedTocTitle || line === tocTitle) {
-        // Make sure it's not followed by "BACK TO NOTE" (which indicates Notes section)
+      if (cleanLine === cleanTocTitle || normalizedLine === normalizedTocTitle || line === tocTitle) {
+        // Skip if in Notes section
         const nextLine = lines[i + 1]?.trim() || ''
         const nextNextLine = lines[i + 2]?.trim() || ''
         
         if (nextLine.includes('BACK TO NOTE') || nextNextLine.includes('BACK TO NOTE')) {
-          console.log(`    Skipping "${tocTitle}" at line ${i} (in Notes section)`)
           continue
         }
         
-        // Make sure it looks like a chapter heading
+        // Check context - should look like a heading (surrounded by shorter lines)
         const prevLine = lines[i - 1]?.trim() || ''
-        const looksLikeHeading = 
-          (prevLine.length === 0 || prevLine.length < 30) ||
-          (nextLine.length === 0 || nextLine.length < 50)
+        const prevPrevLine = lines[i - 2]?.trim() || ''
         
-        if (looksLikeHeading && !foundTitles.has(normalizedTocTitle)) {
-          foundTitles.add(normalizedTocTitle)
+        // Heading indicators:
+        // - Previous line is empty or short
+        // - OR previous line ends with punctuation (end of paragraph)
+        // - Next line has content (not just another header)
+        const prevIsTransition = prevLine.length === 0 || 
+                                 prevLine.length < 30 ||
+                                 /[.!?"]$/.test(prevLine) ||
+                                 /^OceanofPDF/i.test(prevLine) ||
+                                 /^\[\d+\]$/.test(prevLine)  // Footnote marker
+        
+        const nextHasContent = nextLine.length > 30 || 
+                               (nextLine.length === 0 && nextNextLine.length > 30)
+        
+        if (prevIsTransition && !foundTitles.has(cleanTocTitle)) {
+          foundTitles.add(cleanTocTitle)
           markers.push({ lineIdx: i, title: tocTitle, chapterNum: markers.length + 1 })
-          console.log(`    Found chapter: "${tocTitle}" at line ${i}`)
+          console.log(`    Found: "${tocTitle}" at line ${i}`)
           break
         }
       }
@@ -404,7 +428,7 @@ function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: stri
   }
   
   if (markers.length < 2) {
-    console.log(`  Only found ${markers.length} chapters in content, need at least 2`)
+    console.log(`  Only found ${markers.length} sections in content, need at least 2`)
     return []
   }
   
@@ -417,7 +441,7 @@ function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: stri
     num++
   }
   
-  console.log(`  Found ${markers.length} topic-based chapters`)
+  console.log(`  Found ${markers.length} topic-based sections/chapters`)
   return markers
 }
 
