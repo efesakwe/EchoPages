@@ -76,11 +76,10 @@ export async function detectChapters(
 /**
  * Find TOC and extract chapter entries
  * Supports multiple TOC styles:
- * 1. Numbered: "1. CASEY", "2. DYLAN"
+ * 1. Numbered POV: "1. CASEY", "2. DYLAN" (all caps character names)
  * 2. Topic-based: "Dust", "Apprentice to Jesus", "Goal #1: Be with Jesus"
  */
 function findTOC(lines: string[]): Array<{ number: number; name: string; title: string }> {
-  const entries: Array<{ number: number; name: string; title: string }> = []
   let tocStart = -1
   let tocEnd = -1
   
@@ -93,12 +92,11 @@ function findTOC(lines: string[]): Array<{ number: number; name: string; title: 
     }
   }
   
-  if (tocStart === -1) return entries
+  if (tocStart === -1) return []
   
-  // Find where TOC ends (first long prose line or significant gap)
+  // Find where TOC ends (first long prose line)
   for (let i = tocStart + 1; i < Math.min(tocStart + 200, lines.length); i++) {
     const line = lines[i].trim()
-    // TOC entries are typically short, prose is long
     if (line.length > 120 && !/^\d+\./.test(line)) {
       tocEnd = i
       break
@@ -109,26 +107,65 @@ function findTOC(lines: string[]): Array<{ number: number; name: string; title: 
   
   console.log(`  TOC found at lines ${tocStart}-${tocEnd}`)
   
-  // First, try numbered format: "1. CASEY"
+  // Collect all TOC lines for analysis
+  const tocLines: string[] = []
   for (let i = tocStart + 1; i < tocEnd; i++) {
     const line = lines[i].trim()
-    const match = line.match(/^(\d{1,2})\.\s*([A-Z][A-Z\s]{1,30})$/i)
-    if (match) {
-      const number = parseInt(match[1])
-      const name = match[2].trim().toUpperCase()
-      entries.push({ number, name, title: `${number}. ${name}` })
-      console.log(`  TOC Entry (numbered): ${number}. ${name}`)
+    if (line.length > 0) {
+      tocLines.push(line)
     }
   }
   
-  // If no numbered entries found, try topic-based detection
-  if (entries.length === 0) {
-    console.log('  No numbered entries found, trying topic-based detection...')
-    const topicEntries = findTopicBasedTOC(lines, tocStart, tocEnd)
-    return topicEntries
+  // Detect TOC style by looking for patterns
+  // Style 1: Numbered POV chapters "1. CASEY" (character name in CAPS after number)
+  // Style 2: Topic-based "Goal #1:", "Dust", "Apprentice to Jesus"
+  
+  let hasNumberedPOV = false  // "1. CASEY" style
+  let hasTopicBased = false   // "Goal #1:", "Dust" style
+  
+  for (const line of tocLines) {
+    // Check for numbered POV: "1. CASEY" (number + ALL CAPS name, 1-2 words)
+    if (/^\d{1,2}\.\s*[A-Z]{2,}(\s+[A-Z]{2,})?$/.test(line)) {
+      hasNumberedPOV = true
+    }
+    // Check for topic-based: "Goal #1:", "Part 1:", single capitalized word
+    if (/^(Goal|Part|Section)\s*#?\d+/i.test(line) || 
+        /^[A-Z][a-z]+$/.test(line) ||  // Single capitalized word like "Dust"
+        /^How\?|^What\?|^Why\?/i.test(line)) {
+      hasTopicBased = true
+    }
   }
   
-  return entries
+  console.log(`  TOC style detection: numberedPOV=${hasNumberedPOV}, topicBased=${hasTopicBased}`)
+  
+  // If topic-based patterns found, use topic-based detection (even if some numbered items exist)
+  // This prevents picking up numbered subsections like "1. To be with your rabbi"
+  if (hasTopicBased) {
+    console.log('  Using topic-based detection (found Goal/Part/single-word patterns)...')
+    return findTopicBasedTOC(lines, tocStart, tocEnd)
+  }
+  
+  // Otherwise, try numbered POV format: "1. CASEY"
+  const entries: Array<{ number: number; name: string; title: string }> = []
+  for (let i = tocStart + 1; i < tocEnd; i++) {
+    const line = lines[i].trim()
+    // Only match: number + period + ALL CAPS name (1-3 words)
+    const match = line.match(/^(\d{1,2})\.\s*([A-Z]{2,}(?:\s+[A-Z]{2,}){0,2})$/)
+    if (match) {
+      const number = parseInt(match[1])
+      const name = match[2].trim()
+      entries.push({ number, name, title: `${number}. ${name}` })
+      console.log(`  TOC Entry (numbered POV): ${number}. ${name}`)
+    }
+  }
+  
+  if (entries.length >= 2) {
+    return entries
+  }
+  
+  // Fallback to topic-based if numbered didn't work
+  console.log('  Numbered detection found < 2 entries, trying topic-based...')
+  return findTopicBasedTOC(lines, tocStart, tocEnd)
 }
 
 /**
@@ -150,29 +187,28 @@ function findTopicBasedTOC(lines: string[], tocStart: number, tocEnd: number): A
   
   console.log(`  Analyzing ${tocLines.length} TOC lines for topic-based structure...`)
   
-  // Patterns that indicate CHAPTER titles (main sections):
-  // 1. Short standalone words (1-3 words, not starting with quotes or lowercase)
-  // 2. "Goal #N:" or "Part N:" format
-  // 3. Questions ending in "?"
-  // 4. "Prologue", "Epilogue", "Introduction", "Conclusion"
-  
-  // Patterns that indicate SUB-SECTIONS (not chapters):
-  // 1. Starts with quote: "Abide in me"
-  // 2. Starts with lowercase (except after colon)
-  // 3. Very descriptive phrases: "Three goals of an apprentice"
-  
+  // CHAPTER patterns (main sections):
   const chapterPatterns = [
     /^(Prologue|Epilogue|Introduction|Conclusion|Preface|Foreword|Afterword)$/i,
-    /^(Part|Goal|Section|Chapter)\s*#?\d*:?\s*.*/i,  // "Goal #1: Be with Jesus", "Part 1"
-    /^How\?/i,  // Questions like "How? A Rule of Life"
+    /^(Part|Goal|Section|Chapter)\s*#?\d+/i,  // "Goal #1:", "Part 1", "Section 2"
+    /^How\?/i,   // Questions: "How? A Rule of Life"
     /^What\?/i,
     /^Why\?/i,
+    /^When\?/i,
+    /^Where\?/i,
   ]
   
-  // Characteristics of main chapter titles vs sub-sections:
-  // - Chapter titles are often shorter (1-5 words)
-  // - Sub-sections often start with quotes or articles
-  // - Sub-sections are often more descriptive
+  // SUB-SECTION patterns (NOT chapters - skip these):
+  const subSectionPatterns = [
+    /^["'"']/,                    // Starts with quote: "Abide in me"
+    /^[a-z]/,                     // Starts lowercase
+    /^\d+\.\s+[A-Z][a-z]/,       // "1. To be with" - numbered with lowercase continuation
+    /^\d+\.\s+[A-Z][a-z].*\s(to|with|for|of|in|on|by|the|a|an)\s/i,  // Numbered descriptive
+    /_/,                          // Underscored/italicized: _Disciple_
+    /^(The|A|An)\s+\w+\s+\w+/i,  // Articles: "The reward for..."
+    /^(Three|Four|Five|Six|Seven|Eight|Nine|Ten)\s+/i,  // Number words: "Three goals..."
+    /\s(isn't|aren't|doesn't|don't|won't|can't)\s/i,  // Contractions (descriptive)
+  ]
   
   let chapterNum = 0
   
@@ -180,16 +216,20 @@ function findTopicBasedTOC(lines: string[], tocStart: number, tocEnd: number): A
     const line = tocLines[i]
     const words = line.split(/\s+/)
     
-    // Skip lines that look like sub-sections
-    const looksLikeSubSection = 
-      line.startsWith('"') ||  // Quoted
-      line.startsWith('"') ||  // Smart quotes
-      line.startsWith("'") ||
-      /^[a-z]/.test(line) ||  // Starts lowercase
-      line.includes('_') ||   // Underscored/italicized indicator
-      words.length > 8        // Very long descriptive phrase
+    // Skip if matches sub-section pattern
+    let isSubSection = false
+    for (const pattern of subSectionPatterns) {
+      if (pattern.test(line)) {
+        isSubSection = true
+        console.log(`    Skipped (subsection): "${line.substring(0, 50)}..."`)
+        break
+      }
+    }
+    if (isSubSection) continue
     
-    if (looksLikeSubSection) {
+    // Skip very long lines (likely descriptive text)
+    if (words.length > 7) {
+      console.log(`    Skipped (too long): "${line.substring(0, 50)}..."`)
       continue
     }
     
@@ -203,15 +243,18 @@ function findTopicBasedTOC(lines: string[], tocStart: number, tocEnd: number): A
       }
     }
     
-    // Also check: short title (1-5 words) that doesn't look like a sub-section
-    if (!isChapter && words.length <= 5) {
-      // Check if the title looks "main" enough
-      // - First word is capitalized
-      // - Not a common article/preposition phrase
-      const startsCapitalized = /^[A-Z]/.test(line)
-      const notArticleStart = !/^(The|A|An|To|For|In|On|With|By)\s+[a-z]/i.test(line)
-      
-      if (startsCapitalized && notArticleStart) {
+    // Also accept: Single capitalized word (like "Dust")
+    if (!isChapter && /^[A-Z][a-z]+$/.test(line)) {
+      isChapter = true
+    }
+    
+    // Also accept: Short title case phrases (2-4 words, each capitalized)
+    // Like "Apprentice to Jesus"
+    if (!isChapter && words.length >= 2 && words.length <= 4) {
+      const firstWordCapitalized = /^[A-Z]/.test(words[0])
+      const lastWordCapitalized = /^[A-Z]/.test(words[words.length - 1])
+      // Allow prepositions in the middle: "to", "of", "the"
+      if (firstWordCapitalized && lastWordCapitalized) {
         isChapter = true
       }
     }
