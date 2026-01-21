@@ -759,6 +759,23 @@ function logResults(chapters: Chapter[], fullText: string) {
   console.log(`\nCoverage: ${coverage.toFixed(1)}%`)
 }
 
+/**
+ * Sanitize text for PostgreSQL storage
+ * Removes null bytes and other problematic Unicode characters
+ */
+function sanitizeText(text: string): string {
+  return text
+    // Remove null bytes (most common issue)
+    .replace(/\u0000/g, '')
+    // Remove other problematic control characters (except newlines and tabs)
+    .replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+    // Replace problematic Unicode escape sequences
+    .replace(/\\u[0-9a-fA-F]{0,3}(?![0-9a-fA-F])/g, '')
+    // Normalize whitespace
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+}
+
 export async function saveChapters(bookId: string, chapters: Chapter[]): Promise<void> {
   const supabase = createServiceClient()
   
@@ -766,13 +783,17 @@ export async function saveChapters(bookId: string, chapters: Chapter[]): Promise
   await supabase.from('chapters').delete().eq('book_id', bookId)
   
   for (const chapter of chapters) {
+    // Sanitize text before saving to prevent Unicode issues
+    const sanitizedTitle = sanitizeText(chapter.title)
+    const sanitizedText = sanitizeText(chapter.text)
+    
     const { error } = await supabase
       .from('chapters')
       .insert({
         book_id: bookId,
         idx: chapter.idx,
-        title: chapter.title,
-        text_content: chapter.text,
+        title: sanitizedTitle,
+        text_content: sanitizedText,
       })
 
     if (error) throw new Error(`Failed to save chapter ${chapter.idx}: ${error.message}`)
