@@ -75,6 +75,9 @@ export async function detectChapters(
 
 /**
  * Find TOC and extract chapter entries
+ * Supports multiple TOC styles:
+ * 1. Numbered: "1. CASEY", "2. DYLAN"
+ * 2. Topic-based: "Dust", "Apprentice to Jesus", "Goal #1: Be with Jesus"
  */
 function findTOC(lines: string[]): Array<{ number: number; name: string; title: string }> {
   const entries: Array<{ number: number; name: string; title: string }> = []
@@ -92,30 +95,135 @@ function findTOC(lines: string[]): Array<{ number: number; name: string; title: 
   
   if (tocStart === -1) return entries
   
-  // Find where TOC ends (first long prose line)
-  for (let i = tocStart + 1; i < Math.min(tocStart + 100, lines.length); i++) {
+  // Find where TOC ends (first long prose line or significant gap)
+  for (let i = tocStart + 1; i < Math.min(tocStart + 200, lines.length); i++) {
     const line = lines[i].trim()
     // TOC entries are typically short, prose is long
-    if (line.length > 100 && !/^\d+\./.test(line)) {
+    if (line.length > 120 && !/^\d+\./.test(line)) {
       tocEnd = i
       break
     }
   }
   
-  if (tocEnd === -1) tocEnd = Math.min(tocStart + 100, lines.length)
+  if (tocEnd === -1) tocEnd = Math.min(tocStart + 200, lines.length)
   
-  // Extract entries from TOC
+  console.log(`  TOC found at lines ${tocStart}-${tocEnd}`)
+  
+  // First, try numbered format: "1. CASEY"
   for (let i = tocStart + 1; i < tocEnd; i++) {
     const line = lines[i].trim()
-    
-    // Pattern: "1. CASEY" or "1.  CASEY" or "1.CASEY" (number + period + optional space(s) + name)
-    // Name can be uppercase letters with optional spaces
     const match = line.match(/^(\d{1,2})\.\s*([A-Z][A-Z\s]{1,30})$/i)
     if (match) {
       const number = parseInt(match[1])
-      const name = match[2].trim().toUpperCase() // Normalize to uppercase
+      const name = match[2].trim().toUpperCase()
       entries.push({ number, name, title: `${number}. ${name}` })
-      console.log(`  TOC Entry: ${number}. ${name}`)
+      console.log(`  TOC Entry (numbered): ${number}. ${name}`)
+    }
+  }
+  
+  // If no numbered entries found, try topic-based detection
+  if (entries.length === 0) {
+    console.log('  No numbered entries found, trying topic-based detection...')
+    const topicEntries = findTopicBasedTOC(lines, tocStart, tocEnd)
+    return topicEntries
+  }
+  
+  return entries
+}
+
+/**
+ * Find topic-based TOC entries (chapters that are topics/themes, not numbered)
+ * Example: "Dust", "Apprentice to Jesus", "Goal #1: Be with Jesus"
+ * Sub-sections underneath these are NOT chapters
+ */
+function findTopicBasedTOC(lines: string[], tocStart: number, tocEnd: number): Array<{ number: number; name: string; title: string }> {
+  const entries: Array<{ number: number; name: string; title: string }> = []
+  const tocLines: string[] = []
+  
+  // Collect all non-empty TOC lines
+  for (let i = tocStart + 1; i < tocEnd; i++) {
+    const line = lines[i].trim()
+    if (line.length > 0) {
+      tocLines.push(line)
+    }
+  }
+  
+  console.log(`  Analyzing ${tocLines.length} TOC lines for topic-based structure...`)
+  
+  // Patterns that indicate CHAPTER titles (main sections):
+  // 1. Short standalone words (1-3 words, not starting with quotes or lowercase)
+  // 2. "Goal #N:" or "Part N:" format
+  // 3. Questions ending in "?"
+  // 4. "Prologue", "Epilogue", "Introduction", "Conclusion"
+  
+  // Patterns that indicate SUB-SECTIONS (not chapters):
+  // 1. Starts with quote: "Abide in me"
+  // 2. Starts with lowercase (except after colon)
+  // 3. Very descriptive phrases: "Three goals of an apprentice"
+  
+  const chapterPatterns = [
+    /^(Prologue|Epilogue|Introduction|Conclusion|Preface|Foreword|Afterword)$/i,
+    /^(Part|Goal|Section|Chapter)\s*#?\d*:?\s*.*/i,  // "Goal #1: Be with Jesus", "Part 1"
+    /^How\?/i,  // Questions like "How? A Rule of Life"
+    /^What\?/i,
+    /^Why\?/i,
+  ]
+  
+  // Characteristics of main chapter titles vs sub-sections:
+  // - Chapter titles are often shorter (1-5 words)
+  // - Sub-sections often start with quotes or articles
+  // - Sub-sections are often more descriptive
+  
+  let chapterNum = 0
+  
+  for (let i = 0; i < tocLines.length; i++) {
+    const line = tocLines[i]
+    const words = line.split(/\s+/)
+    
+    // Skip lines that look like sub-sections
+    const looksLikeSubSection = 
+      line.startsWith('"') ||  // Quoted
+      line.startsWith('"') ||  // Smart quotes
+      line.startsWith("'") ||
+      /^[a-z]/.test(line) ||  // Starts lowercase
+      line.includes('_') ||   // Underscored/italicized indicator
+      words.length > 8        // Very long descriptive phrase
+    
+    if (looksLikeSubSection) {
+      continue
+    }
+    
+    // Check if it matches chapter patterns
+    let isChapter = false
+    
+    for (const pattern of chapterPatterns) {
+      if (pattern.test(line)) {
+        isChapter = true
+        break
+      }
+    }
+    
+    // Also check: short title (1-5 words) that doesn't look like a sub-section
+    if (!isChapter && words.length <= 5) {
+      // Check if the title looks "main" enough
+      // - First word is capitalized
+      // - Not a common article/preposition phrase
+      const startsCapitalized = /^[A-Z]/.test(line)
+      const notArticleStart = !/^(The|A|An|To|For|In|On|With|By)\s+[a-z]/i.test(line)
+      
+      if (startsCapitalized && notArticleStart) {
+        isChapter = true
+      }
+    }
+    
+    if (isChapter) {
+      chapterNum++
+      entries.push({ 
+        number: chapterNum, 
+        name: line, 
+        title: line 
+      })
+      console.log(`  TOC Entry (topic): ${chapterNum}. "${line}"`)
     }
   }
   
@@ -124,6 +232,7 @@ function findTOC(lines: string[]): Array<{ number: number; name: string; title: 
 
 /**
  * Find chapter markers in the text based on TOC entries
+ * Handles both numbered ("1. CASEY") and topic-based ("Apprentice to Jesus") chapters
  */
 function findMarkersFromTOC(lines: string[], tocEntries: Array<{ number: number; name: string; title: string }>): { lineIdx: number; title: string; chapterNum: number }[] {
   const markers: { lineIdx: number; title: string; chapterNum: number }[] = []
@@ -137,12 +246,16 @@ function findMarkersFromTOC(lines: string[], tocEntries: Array<{ number: number;
   
   for (const entry of tocEntries) {
     // Normalize name: escape special regex characters and handle spaces
-    const escapedName = entry.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+')
-    // Try to find the pattern in the text: "1. CASEY" or just "CASEY" on its own line
-    // Pattern 1: "1. CASEY" (with number)
+    const escapedName = entry.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*')
+    
+    // Build patterns to find this chapter in the main text
+    // Pattern 1: Numbered format "1. NAME"
     const pattern1 = new RegExp(`^${entry.number}\\.\\s*${escapedName}$`, 'i')
-    // Pattern 2: Just "CASEY" (name only, case-insensitive)
+    // Pattern 2: Just the name/title on its own line
     const pattern2 = new RegExp(`^${escapedName}$`, 'i')
+    // Pattern 3: Name with slight variations (for topic-based chapters)
+    // Allow some flexibility for formatting differences
+    const simplifiedName = entry.name.replace(/[^\w\s]/g, '').toLowerCase()
     
     let found = false
     
@@ -153,10 +266,13 @@ function findMarkersFromTOC(lines: string[], tocEntries: Array<{ number: number;
       
       const line = lines[i].trim()
       
-      // Skip if line is too long (not a chapter marker)
+      // Skip if line is too long (not a chapter marker) unless it's a topic-based chapter
       if (line.length > 100) continue
       
-      // Try exact match: "1. CASEY"
+      // Skip if line is too short (empty or just punctuation)
+      if (line.length < 2) continue
+      
+      // Try exact match: "1. NAME"
       if (pattern1.test(line)) {
         const nextLine = lines[i + 1]?.trim() || ''
         const nextNextLine = lines[i + 2]?.trim() || ''
@@ -168,28 +284,57 @@ function findMarkersFromTOC(lines: string[], tocEntries: Array<{ number: number;
         if (hasContent) {
           markers.push({ lineIdx: i, title: entry.title, chapterNum: entry.number })
           usedLineIndices.add(i)
-          console.log(`  Found marker for "${entry.title}" at line ${i}`)
+          console.log(`  Found marker for "${entry.title}" at line ${i} (numbered)`)
           found = true
           break
         }
       }
       
-      // Try name-only match: "CASEY" (only if name is reasonably short)
-      if (!found && entry.name.length <= 20 && pattern2.test(line)) {
+      // Try exact name match
+      if (!found && pattern2.test(line)) {
         const prevLine = lines[i - 1]?.trim() || ''
         const nextLine = lines[i + 1]?.trim() || ''
         const nextNextLine = lines[i + 2]?.trim() || ''
         
         // Should be preceded by empty/short line, followed by content
-        const validContext = (prevLine.length === 0 || prevLine.length < 30) &&
-          (nextLine.length > 30 || (nextLine.length === 0 && nextNextLine.length > 30))
+        const validContext = (prevLine.length === 0 || prevLine.length < 40) &&
+          (nextLine.length > 20 || (nextLine.length === 0 && nextNextLine.length > 20))
         
         if (validContext) {
           markers.push({ lineIdx: i, title: entry.title, chapterNum: entry.number })
           usedLineIndices.add(i)
-          console.log(`  Found marker for "${entry.title}" at line ${i} (name only)`)
+          console.log(`  Found marker for "${entry.title}" at line ${i} (exact name)`)
           found = true
           break
+        }
+      }
+      
+      // Try simplified match for topic-based chapters (ignoring punctuation)
+      if (!found) {
+        const simplifiedLine = line.replace(/[^\w\s]/g, '').toLowerCase()
+        if (simplifiedLine === simplifiedName || simplifiedLine.includes(simplifiedName)) {
+          const prevLine = lines[i - 1]?.trim() || ''
+          const nextLine = lines[i + 1]?.trim() || ''
+          const nextNextLine = lines[i + 2]?.trim() || ''
+          const nextNextNextLine = lines[i + 3]?.trim() || ''
+          
+          // Check if this looks like a chapter heading
+          // - Preceded by empty/short line
+          // - Followed by content (within a few lines)
+          const validPrev = prevLine.length === 0 || prevLine.length < 40
+          const hasContent = 
+            nextLine.length > 30 ||
+            (nextLine.length === 0 && nextNextLine.length > 30) ||
+            (nextLine.length < 30 && nextNextLine.length > 30) ||
+            (nextLine.length === 0 && nextNextLine.length === 0 && nextNextNextLine.length > 30)
+          
+          if (validPrev && hasContent) {
+            markers.push({ lineIdx: i, title: entry.title, chapterNum: entry.number })
+            usedLineIndices.add(i)
+            console.log(`  Found marker for "${entry.title}" at line ${i} (simplified match: "${line}")`)
+            found = true
+            break
+          }
         }
       }
     }
@@ -202,24 +347,30 @@ function findMarkersFromTOC(lines: string[], tocEntries: Array<{ number: number;
   // Sort by line index to get correct reading order
   markers.sort((a, b) => a.lineIdx - b.lineIdx)
   
-  // Re-number sequentially (1, 2, 3...) based on order, but preserve the name
-  // This ensures chapters are numbered sequentially even if TOC has gaps (e.g., 46, 47)
-  let sequentialNum = 1
+  // Re-number sequentially based on order
+  // For topic-based chapters, keep the original title but add a number prefix
+  let sequentialNum = 0
   for (const marker of markers) {
-    // Extract the name from the title (e.g., "46. DYLAN" -> "DYLAN")
-    const nameMatch = marker.title.match(/^\d+\.\s*(.+)$/)
-    if (nameMatch) {
-      const name = nameMatch[1].trim()
-      const originalNum = marker.chapterNum
-      marker.title = `${sequentialNum}. ${name}`
-      marker.chapterNum = sequentialNum++
-      console.log(`  Renumbered: ${originalNum}. ${name} -> ${marker.title}`)
+    // Check if it's a prologue/epilogue (keep at 0 or end)
+    const lowerTitle = marker.title.toLowerCase()
+    if (lowerTitle.includes('prologue') || lowerTitle.includes('preface') || lowerTitle.includes('introduction')) {
+      marker.chapterNum = 0
+      marker.title = marker.title // Keep as-is (e.g., "Prologue" or "Dust")
+      console.log(`  Prologue/Preface: "${marker.title}"`)
+    } else if (lowerTitle.includes('epilogue') || lowerTitle.includes('afterword') || lowerTitle.includes('conclusion')) {
+      marker.chapterNum = 998
+      marker.title = marker.title
+      console.log(`  Epilogue/Afterword: "${marker.title}"`)
     } else {
-      // If no number in title, just add sequential number
-      const originalTitle = marker.title
-      marker.title = `${sequentialNum}. ${marker.title}`
-      marker.chapterNum = sequentialNum++
-      console.log(`  Renumbered: "${originalTitle}" -> ${marker.title}`)
+      sequentialNum++
+      // Check if title already has a number prefix
+      const hasNumberPrefix = /^\d+\.\s/.test(marker.title)
+      if (!hasNumberPrefix) {
+        const originalTitle = marker.title
+        marker.title = `${sequentialNum}. ${marker.title}`
+        console.log(`  Numbered: "${originalTitle}" -> "${marker.title}"`)
+      }
+      marker.chapterNum = sequentialNum
     }
   }
   
