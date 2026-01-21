@@ -34,6 +34,17 @@ export async function detectChapters(
   const lines = text.split('\n')
   console.log(`Total lines: ${lines.length}`)
   
+  // Debug: Show first 100 non-empty lines to understand document structure
+  console.log('\n--- First 100 non-empty lines for debugging ---')
+  let shown = 0
+  for (let i = 0; i < lines.length && shown < 100; i++) {
+    const line = lines[i].trim()
+    if (line.length > 0) {
+      console.log(`  [${i}] (${line.length} chars): "${line.substring(0, 80)}${line.length > 80 ? '...' : ''}"`)
+      shown++
+    }
+  }
+  
   // Strategy 1: Try to find TOC with numbered entries (e.g., "1. CASEY")
   const tocEntries = findTOC(lines)
   if (tocEntries.length > 0) {
@@ -239,115 +250,99 @@ function findMarkersFromTOC(lines: string[], tocEntries: Array<{ number: number;
 }
 
 /**
- * Strategy 3: Find topic-based chapters (e.g., "Goal #1: Be with Jesus", "Dust")
- * This handles books with themed/topic TOCs instead of numbered chapters
+ * Strategy 3: Find topic-based chapters by scanning the ENTIRE document
+ * This handles books with themed/topic chapters like "Goal #1: Be with Jesus", "Dust"
+ * Scans for chapter-like patterns in the main content, not just the TOC
  */
 function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: string; chapterNum: number }[] {
   const markers: { lineIdx: number; title: string; chapterNum: number }[] = []
-  
-  // First, find the TOC section
-  let tocStart = -1
-  let tocEnd = -1
-  
-  for (let i = 0; i < Math.min(500, lines.length); i++) {
-    const line = lines[i].trim().toLowerCase()
-    if (line.includes('contents') || line.includes('table of contents')) {
-      tocStart = i
-      break
-    }
-  }
-  
-  if (tocStart === -1) {
-    console.log('  No TOC found for topic-based detection')
-    return markers
-  }
-  
-  // Find where TOC ends
-  for (let i = tocStart + 1; i < Math.min(tocStart + 150, lines.length); i++) {
-    const line = lines[i].trim()
-    if (line.length > 120 && !/^\d+\./.test(line)) {
-      tocEnd = i
-      break
-    }
-  }
-  if (tocEnd === -1) tocEnd = Math.min(tocStart + 150, lines.length)
-  
-  console.log(`  TOC found at lines ${tocStart}-${tocEnd}`)
-  
-  // Extract potential chapter titles from TOC
-  // These are topic-based patterns that aren't numbered POV chapters
-  const chapterTitles: string[] = []
-  
-  for (let i = tocStart + 1; i < tocEnd; i++) {
-    const line = lines[i].trim()
-    if (line.length === 0) continue
-    
-    // Skip lines that look like subsections
-    const isSubSection = 
-      line.startsWith('"') || line.startsWith('"') || line.startsWith("'") ||  // Quoted
-      /^[a-z]/.test(line) ||  // Starts lowercase
-      /^\d+\.\s+[A-Z][a-z]/.test(line) ||  // "1. To be with..." numbered subsection
-      line.includes('_') ||  // Italicized
-      line.split(/\s+/).length > 7  // Too long
-    
-    if (isSubSection) continue
-    
-    // Check for chapter-like patterns
-    const isChapterTitle = 
-      /^(Goal|Part|Section)\s*#?\d+/i.test(line) ||  // "Goal #1:", "Part 1"
-      /^(Prologue|Epilogue|Introduction|Conclusion|Preface|Foreword|Afterword)$/i.test(line) ||
-      /^(How|What|Why|When|Where)\?/i.test(line) ||  // Questions
-      /^[A-Z][a-z]+$/.test(line) ||  // Single capitalized word like "Dust"
-      (/^[A-Z]/.test(line) && line.split(/\s+/).length <= 4 && /[A-Z]$/.test(line.split(/\s+/).pop() || ''))  // Short title case
-    
-    if (isChapterTitle) {
-      chapterTitles.push(line)
-      console.log(`  Topic TOC entry: "${line}"`)
-    }
-  }
-  
-  if (chapterTitles.length < 2) {
-    console.log(`  Only found ${chapterTitles.length} topic entries, not enough`)
-    return markers
-  }
-  
-  // Now find these titles in the main text
   const contentStart = findContentStart(lines)
-  const usedLines = new Set<number>()
   
-  for (const title of chapterTitles) {
-    const simplifiedTitle = title.replace(/[^\w\s]/g, '').toLowerCase().trim()
+  console.log(`  Scanning document from line ${contentStart} for topic-based chapter patterns...`)
+  
+  // Chapter-like patterns to look for:
+  const chapterPatterns = [
+    // "Goal #1: ...", "Part 1: ...", "Section 2: ..."
+    { regex: /^(Goal|Part|Section)\s*#?\d+\s*[:.]?\s*.*/i, name: 'Goal/Part/Section' },
+    // Questions: "How? A Rule of Life"
+    { regex: /^(How|What|Why|When|Where)\?\s*.*/i, name: 'Question' },
+    // Single capitalized word (2-15 chars): "Dust", "Prologue"
+    { regex: /^[A-Z][a-z]{1,14}$/, name: 'Single Word' },
+    // Special sections
+    { regex: /^(Prologue|Epilogue|Introduction|Conclusion|Preface|Foreword|Afterword|Appendix)$/i, name: 'Special Section' },
+  ]
+  
+  // Additional pattern: Title case phrases (2-5 words) where first word is capitalized
+  // and the phrase is short (under 50 chars)
+  // Examples: "Apprentice to Jesus", "Be with Jesus", "A Rule of Life"
+  
+  for (let i = contentStart; i < lines.length; i++) {
+    const line = lines[i].trim()
     
-    for (let i = contentStart; i < lines.length; i++) {
-      if (usedLines.has(i)) continue
+    // Skip empty lines and very long lines
+    if (line.length === 0 || line.length > 60) continue
+    
+    // Skip lines that look like regular prose (too many words, ends with punctuation)
+    const words = line.split(/\s+/)
+    if (words.length > 6) continue
+    if (/[.!,;]$/.test(line) && !/\?$/.test(line)) continue  // Allow questions
+    
+    // Skip lines that are clearly not chapter titles
+    if (/^[a-z]/.test(line)) continue  // Starts lowercase
+    if (line.startsWith('"') || line.startsWith('"') || line.startsWith("'")) continue  // Quoted
+    if (/^\d+\.\s+[A-Z][a-z]/.test(line) && !/^(Goal|Part|Section)/i.test(line)) continue  // Numbered subsections like "1. To be..."
+    
+    // Check against chapter patterns
+    let isChapterTitle = false
+    let matchType = ''
+    
+    for (const pattern of chapterPatterns) {
+      if (pattern.regex.test(line)) {
+        isChapterTitle = true
+        matchType = pattern.name
+        break
+      }
+    }
+    
+    // Also check for title-case phrases (2-5 words, first word capitalized, reasonable length)
+    if (!isChapterTitle && words.length >= 2 && words.length <= 5 && line.length <= 40) {
+      const firstWordCap = /^[A-Z]/.test(words[0])
+      const notAllLowerMiddle = words.slice(1, -1).some(w => /^[A-Z]/.test(w)) || words.length === 2
       
-      const line = lines[i].trim()
-      if (line.length === 0 || line.length > 100) continue
-      
-      const simplifiedLine = line.replace(/[^\w\s]/g, '').toLowerCase().trim()
-      
-      // Check for match
-      if (simplifiedLine === simplifiedTitle || line === title) {
-        const prevLine = lines[i - 1]?.trim() || ''
-        const nextLine = lines[i + 1]?.trim() || ''
-        const nextNextLine = lines[i + 2]?.trim() || ''
-        
-        // Verify it looks like a chapter heading
-        const validContext = 
-          (prevLine.length === 0 || prevLine.length < 40) &&
-          (nextLine.length > 20 || (nextLine.length === 0 && nextNextLine.length > 20) || nextLine.length < 30)
-        
-        if (validContext) {
-          markers.push({ lineIdx: i, title: title, chapterNum: markers.length + 1 })
-          usedLines.add(i)
-          console.log(`  Found topic marker: "${title}" at line ${i}`)
-          break
-        }
+      if (firstWordCap && (notAllLowerMiddle || words.length <= 3)) {
+        isChapterTitle = true
+        matchType = 'Title Case'
+      }
+    }
+    
+    if (!isChapterTitle) continue
+    
+    // Verify context: should look like a chapter heading
+    const prevLine = lines[i - 1]?.trim() || ''
+    const prevPrevLine = lines[i - 2]?.trim() || ''
+    const nextLine = lines[i + 1]?.trim() || ''
+    const nextNextLine = lines[i + 2]?.trim() || ''
+    
+    // Good context indicators:
+    // - Preceded by empty line or page break
+    // - Followed by content (prose text)
+    const goodPrev = prevLine.length === 0 || prevLine.length < 20 || 
+                     (prevPrevLine.length === 0 && prevLine.length < 40)
+    const goodNext = nextLine.length > 30 || 
+                     (nextLine.length === 0 && nextNextLine.length > 30) ||
+                     (nextLine.length < 40 && nextNextLine.length > 30)
+    
+    if (goodPrev && goodNext) {
+      // Check we haven't already found something too close (within 20 lines)
+      const tooClose = markers.some(m => Math.abs(m.lineIdx - i) < 20)
+      if (!tooClose) {
+        markers.push({ lineIdx: i, title: line, chapterNum: markers.length + 1 })
+        console.log(`  Found topic chapter (${matchType}): "${line}" at line ${i}`)
       }
     }
   }
   
-  // Re-number sequentially
+  // Sort by line index and re-number
   markers.sort((a, b) => a.lineIdx - b.lineIdx)
   let num = 1
   for (const marker of markers) {
@@ -356,6 +351,7 @@ function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: stri
     num++
   }
   
+  console.log(`  Found ${markers.length} topic-based chapters`)
   return markers
 }
 

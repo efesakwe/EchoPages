@@ -3,7 +3,6 @@ import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { uploadPDF } from '@/lib/services/storageService'
 import { fetchBookMetadata } from '@/lib/services/bookMetadataService'
 import { extractTextFromPDF } from '@/lib/services/pdfService'
-import { parseEpub, isEpub } from '@/lib/services/epubService'
 import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 
@@ -62,12 +61,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing file or title' }, { status: 400 })
     }
 
-    // Check file type (PDF or EPUB)
-    const isPDF = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
-    const isEPUB = file.type === 'application/epub+zip' || file.name.toLowerCase().endsWith('.epub')
-    
-    if (!isPDF && !isEPUB) {
-      return NextResponse.json({ error: 'File must be a PDF or EPUB' }, { status: 400 })
+    if (file.type !== 'application/pdf') {
+      return NextResponse.json({ error: 'File must be a PDF' }, { status: 400 })
     }
 
     // Check file size (50MB limit)
@@ -75,41 +70,27 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'File size exceeds 50MB limit' }, { status: 400 })
     }
 
-    const fileType = isPDF ? 'PDF' : 'EPUB'
-    console.log(`Starting ${fileType} upload for user ${user.id}: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)}MB)`)
+    console.log(`Starting upload for user ${user.id}: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)}MB)`)
 
-    // Upload file to storage
+    // Upload PDF to storage
     let pdfUrl: string
     try {
-      pdfUrl = await uploadPDF(file, user.id) // Works for both PDF and EPUB
-      console.log(`${fileType} uploaded successfully:`, pdfUrl)
+      pdfUrl = await uploadPDF(file, user.id)
+      console.log('PDF uploaded successfully:', pdfUrl)
     } catch (uploadError: any) {
-      console.error(`${fileType} upload error:`, uploadError)
-      return NextResponse.json({ error: uploadError.message || `Failed to upload ${fileType} file` }, { status: 500 })
+      console.error('PDF upload error:', uploadError)
+      return NextResponse.json({ error: uploadError.message || 'Failed to upload PDF file' }, { status: 500 })
     }
 
-    // Extract text sample for metadata
+    // Extract a sample of text from PDF for metadata extraction
     let extractedTextSample = ''
-    const arrayBuffer = await file.arrayBuffer()
-    const fileBuffer = Buffer.from(arrayBuffer)
-    
-    if (isPDF) {
-      try {
-        const { text } = await extractTextFromPDF(fileBuffer)
-        extractedTextSample = text.substring(0, 2000)
-      } catch (error) {
-        console.warn('Failed to extract text from PDF for metadata:', error)
-      }
-    } else {
-      // EPUB - extract text sample from first chapter
-      try {
-        const epubData = await parseEpub(fileBuffer)
-        if (epubData.chapters.length > 0) {
-          extractedTextSample = epubData.chapters[0].text.substring(0, 2000)
-        }
-      } catch (error) {
-        console.warn('Failed to extract text from EPUB for metadata:', error)
-      }
+    try {
+      const arrayBuffer = await file.arrayBuffer()
+      const pdfBuffer = Buffer.from(arrayBuffer)
+      const { text } = await extractTextFromPDF(pdfBuffer)
+      extractedTextSample = text.substring(0, 2000) // First 2000 chars for context
+    } catch (error) {
+      console.warn('Failed to extract text for metadata:', error)
     }
 
     // Fetch book metadata using AI (pass author if provided for better cover matching)
