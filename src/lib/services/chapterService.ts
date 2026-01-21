@@ -487,8 +487,9 @@ function scanForChapterMarkers(lines: string[], startLine: number): { lineIdx: n
     }
     
     // Check for "1. NAME" or "1. CHARACTERNAME" format (numbered POV chapters)
-    // Pattern: number + period + space + word(s)
-    const numberedNameMatch = line.match(/^(\d{1,2})\.\s*([A-Za-z][A-Za-z\s]+)$/i)
+    // Pattern: number + period + space + UPPERCASE word(s) - like "1. CASEY", "47. DYLAN"
+    // This should NOT match subsection titles like "1. To be with your rabbi"
+    const numberedNameMatch = line.match(/^(\d{1,2})\.\s*([A-Z][A-Z\s]+)$/)  // ALL CAPS only
     if (numberedNameMatch) {
       const num = parseInt(numberedNameMatch[1])
       const name = numberedNameMatch[2].trim()
@@ -496,12 +497,18 @@ function scanForChapterMarkers(lines: string[], startLine: number): { lineIdx: n
       const nextNextLine = lines[i + 2]?.trim() || ''
       const nextNextNextLine = lines[i + 3]?.trim() || ''
       
+      // Additional check: name should be short (1-3 words, typically character names)
+      const wordCount = name.split(/\s+/).length
+      if (wordCount > 3) {
+        console.log(`  Skipped: ${num}. ${name} at line ${i} (too many words for chapter name)`)
+        continue
+      }
+      
       // Check if we're still in TOC (multiple consecutive numbered entries)
-      // Look at next 3 lines - if 2+ are also numbered entries, we're likely in TOC
       let numberedEntryCount = 0
       for (let j = 1; j <= 3; j++) {
         const checkLine = lines[i + j]?.trim() || ''
-        if (/^\d{1,2}\.\s*[A-Za-z]/.test(checkLine)) {
+        if (/^\d{1,2}\.\s*[A-Z]/.test(checkLine)) {
           numberedEntryCount++
         }
       }
