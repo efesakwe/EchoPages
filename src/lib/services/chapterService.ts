@@ -252,7 +252,9 @@ function findMarkersFromTOC(lines: string[], tocEntries: Array<{ number: number;
 /**
  * Strategy 3: Find topic-based chapters by scanning the ENTIRE document
  * This handles books with themed/topic chapters like "Goal #1: Be with Jesus", "Dust"
- * Scans for chapter-like patterns in the main content, not just the TOC
+ * 
+ * Key insight: Chapter titles often appear on their OWN PAGE with mostly empty space
+ * around them, while subsection titles appear within flowing text.
  */
 function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: string; chapterNum: number }[] {
   const markers: { lineIdx: number; title: string; chapterNum: number }[] = []
@@ -260,37 +262,29 @@ function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: stri
   
   console.log(`  Scanning document from line ${contentStart} for topic-based chapter patterns...`)
   
-  // Chapter-like patterns to look for:
+  // Known chapter title patterns for this book style:
   const chapterPatterns = [
-    // "Goal #1: ...", "Part 1: ...", "Section 2: ..."
-    { regex: /^(Goal|Part|Section)\s*#?\d+\s*[:.]?\s*.*/i, name: 'Goal/Part/Section' },
+    // "Goal #1: Be with Jesus", "Goal #2: Become like him"
+    { regex: /^Goal\s*#?\d+:?\s*.*/i, name: 'Goal' },
     // Questions: "How? A Rule of Life"
-    { regex: /^(How|What|Why|When|Where)\?\s*.*/i, name: 'Question' },
-    // Single capitalized word (2-15 chars): "Dust", "Prologue"
-    { regex: /^[A-Z][a-z]{1,14}$/, name: 'Single Word' },
-    // Special sections
-    { regex: /^(Prologue|Epilogue|Introduction|Conclusion|Preface|Foreword|Afterword|Appendix)$/i, name: 'Special Section' },
+    { regex: /^How\?\s+.+/i, name: 'Question' },
+    // Single capitalized word: "Dust", "Extras"
+    { regex: /^[A-Z][a-z]{2,12}$/, name: 'Single Word' },
+    // Multi-word titles: "Apprentice to Jesus", "Take up your cross"
+    { regex: /^[A-Z][a-z]+\s+(to|up|the|your|of)\s+[A-Za-z]+$/i, name: 'Multi-word Title' },
   ]
   
-  // Additional pattern: Title case phrases (2-5 words) where first word is capitalized
-  // and the phrase is short (under 50 chars)
-  // Examples: "Apprentice to Jesus", "Be with Jesus", "A Rule of Life"
-  
+  // Track lines that look like they're on a "title page" (sparse surrounding content)
   for (let i = contentStart; i < lines.length; i++) {
     const line = lines[i].trim()
     
     // Skip empty lines and very long lines
-    if (line.length === 0 || line.length > 60) continue
-    
-    // Skip lines that look like regular prose (too many words, ends with punctuation)
-    const words = line.split(/\s+/)
-    if (words.length > 6) continue
-    if (/[.!,;]$/.test(line) && !/\?$/.test(line)) continue  // Allow questions
+    if (line.length === 0 || line.length > 50) continue
     
     // Skip lines that are clearly not chapter titles
     if (/^[a-z]/.test(line)) continue  // Starts lowercase
     if (line.startsWith('"') || line.startsWith('"') || line.startsWith("'")) continue  // Quoted
-    if (/^\d+\.\s+[A-Z][a-z]/.test(line) && !/^(Goal|Part|Section)/i.test(line)) continue  // Numbered subsections like "1. To be..."
+    if (/[.!,;:]$/.test(line) && !/\?/.test(line) && !/Goal\s*#?\d+:/i.test(line)) continue  // Ends with punctuation (except Goal #N:)
     
     // Check against chapter patterns
     let isChapterTitle = false
@@ -304,40 +298,38 @@ function findTopicBasedChapters(lines: string[]): { lineIdx: number; title: stri
       }
     }
     
-    // Also check for title-case phrases (2-5 words, first word capitalized, reasonable length)
-    if (!isChapterTitle && words.length >= 2 && words.length <= 5 && line.length <= 40) {
-      const firstWordCap = /^[A-Z]/.test(words[0])
-      const notAllLowerMiddle = words.slice(1, -1).some(w => /^[A-Z]/.test(w)) || words.length === 2
-      
-      if (firstWordCap && (notAllLowerMiddle || words.length <= 3)) {
-        isChapterTitle = true
-        matchType = 'Title Case'
+    if (!isChapterTitle) continue
+    
+    // KEY CHECK: Chapter titles appear on sparse pages
+    // Look at surrounding 10 lines - should be mostly empty or very short
+    let emptyOrShortCount = 0
+    for (let j = Math.max(0, i - 5); j <= Math.min(lines.length - 1, i + 5); j++) {
+      if (j === i) continue  // Skip the title line itself
+      const nearLine = lines[j].trim()
+      if (nearLine.length === 0 || nearLine.length < 25) {
+        emptyOrShortCount++
       }
     }
     
-    if (!isChapterTitle) continue
+    // At least 6 of the 10 surrounding lines should be empty/short (title page indicator)
+    const isTitlePage = emptyOrShortCount >= 6
     
-    // Verify context: should look like a chapter heading
-    const prevLine = lines[i - 1]?.trim() || ''
-    const prevPrevLine = lines[i - 2]?.trim() || ''
-    const nextLine = lines[i + 1]?.trim() || ''
-    const nextNextLine = lines[i + 2]?.trim() || ''
+    // Also check: next non-empty lines should be prose (long paragraphs)
+    let foundProse = false
+    for (let j = i + 1; j < Math.min(lines.length, i + 30); j++) {
+      const nextLine = lines[j].trim()
+      if (nextLine.length > 80) {
+        foundProse = true
+        break
+      }
+    }
     
-    // Good context indicators:
-    // - Preceded by empty line or page break
-    // - Followed by content (prose text)
-    const goodPrev = prevLine.length === 0 || prevLine.length < 20 || 
-                     (prevPrevLine.length === 0 && prevLine.length < 40)
-    const goodNext = nextLine.length > 30 || 
-                     (nextLine.length === 0 && nextNextLine.length > 30) ||
-                     (nextLine.length < 40 && nextNextLine.length > 30)
-    
-    if (goodPrev && goodNext) {
-      // Check we haven't already found something too close (within 20 lines)
-      const tooClose = markers.some(m => Math.abs(m.lineIdx - i) < 20)
+    if (isTitlePage || foundProse) {
+      // Check we haven't already found something too close (within 50 lines)
+      const tooClose = markers.some(m => Math.abs(m.lineIdx - i) < 50)
       if (!tooClose) {
         markers.push({ lineIdx: i, title: line, chapterNum: markers.length + 1 })
-        console.log(`  Found topic chapter (${matchType}): "${line}" at line ${i}`)
+        console.log(`  Found topic chapter (${matchType}): "${line}" at line ${i} [titlePage=${isTitlePage}, prose=${foundProse}]`)
       }
     }
   }
