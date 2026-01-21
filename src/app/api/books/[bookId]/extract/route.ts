@@ -1,6 +1,7 @@
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { extractTextFromPDF } from '@/lib/services/pdfService'
+import { parseEpub } from '@/lib/services/epubService'
 import { detectChapters, saveChapters } from '@/lib/services/chapterService'
 import { NextResponse } from 'next/server'
 
@@ -102,89 +103,114 @@ export async function POST(
       // Continue anyway - upsert will handle conflicts
     }
 
-    console.log('Attempting to download PDF from path:', filePath)
+    // Check if it's an EPUB or PDF based on file path
+    const isEpub = filePath.toLowerCase().endsWith('.epub')
+    const fileType = isEpub ? 'EPUB' : 'PDF'
+    
+    console.log(`Attempting to download ${fileType} from path:`, filePath)
 
-    // Download PDF from Supabase Storage using service client
-    const { data: pdfData, error: downloadError } = await serviceSupabase.storage
+    // Download file from Supabase Storage using service client
+    const { data: fileData, error: downloadError } = await serviceSupabase.storage
       .from('books')
       .download(filePath)
 
     if (downloadError) {
-      console.error('PDF download error:', downloadError)
-      throw new Error(`Failed to download PDF: ${downloadError.message || JSON.stringify(downloadError)}`)
+      console.error(`${fileType} download error:`, downloadError)
+      throw new Error(`Failed to download ${fileType}: ${downloadError.message || JSON.stringify(downloadError)}`)
     }
 
-    if (!pdfData) {
-      throw new Error('PDF download returned no data')
+    if (!fileData) {
+      throw new Error(`${fileType} download returned no data`)
     }
 
     // Convert Blob to Buffer
-    const arrayBuffer = await pdfData.arrayBuffer()
-    const pdfBuffer = Buffer.from(arrayBuffer)
+    const arrayBuffer = await fileData.arrayBuffer()
+    const fileBuffer = Buffer.from(arrayBuffer)
     
-    if (pdfBuffer.length === 0) {
-      throw new Error('Downloaded PDF is empty')
+    if (fileBuffer.length === 0) {
+      throw new Error(`Downloaded ${fileType} is empty`)
     }
     
-    console.log(`Successfully downloaded PDF, size: ${pdfBuffer.length} bytes`)
+    console.log(`Successfully downloaded ${fileType}, size: ${fileBuffer.length} bytes`)
 
-    // Extract text
-    const { text, numPages, pageTexts } = await extractTextFromPDF(pdfBuffer)
+    let chapters: { idx: number; title: string; text: string }[] = []
+    let totalChapterChars = 0
 
-    if (!text || text.trim().length === 0) {
-      throw new Error('PDF contains no extractable text')
-    }
-
-    console.log(`\n========== PDF EXTRACTION RESULTS ==========`)
-    console.log(`Total pages in PDF: ${numPages}`)
-    console.log(`Pages with text extracted: ${pageTexts?.length || 'N/A'}`)
-    console.log(`Total characters extracted: ${text.length}`)
-    
-    // Check for empty pages
-    if (pageTexts) {
-      const emptyPages = pageTexts.map((p, i) => p.length < 10 ? i + 1 : null).filter(p => p !== null)
-      if (emptyPages.length > 0) {
-        console.warn(`[WARN] Pages with little/no text: ${emptyPages.join(', ')}`)
+    if (isEpub) {
+      // EPUB extraction - uses structured TOC, much more reliable!
+      console.log(`\n========== EPUB EXTRACTION ==========`)
+      
+      const epubData = await parseEpub(fileBuffer)
+      chapters = epubData.chapters
+      
+      if (chapters.length === 0) {
+        throw new Error('No chapters could be extracted from the EPUB')
       }
       
-      // Log first few pages content length
-      console.log(`\nCharacters per page (first 20):`)
-      pageTexts.slice(0, 20).forEach((p, i) => {
-        console.log(`  Page ${i + 1}: ${p.length} chars`)
+      console.log(`Extracted ${chapters.length} chapters from EPUB TOC`)
+      chapters.forEach((ch, i) => {
+        console.log(`  ${i + 1}. "${ch.title}": ${ch.text.length} chars`)
+        totalChapterChars += ch.text.length
       })
-    }
-    
-    console.log(`\nFirst 1000 chars of extracted text:`)
-    console.log(text.substring(0, 1000))
-    console.log(`\n============================================`)
+      console.log(`Total: ${totalChapterChars} characters`)
+      console.log(`==========================================\n`)
+      
+    } else {
+      // PDF extraction - uses text-based chapter detection
+      const { text, numPages, pageTexts } = await extractTextFromPDF(fileBuffer)
 
-    // Detect chapters with page-based extraction
-    const chapters = await detectChapters(text, pageTexts)
+      if (!text || text.trim().length === 0) {
+        throw new Error('PDF contains no extractable text')
+      }
 
-    if (chapters.length === 0) {
-      throw new Error('No chapters could be detected from the PDF')
-    }
+      console.log(`\n========== PDF EXTRACTION RESULTS ==========`)
+      console.log(`Total pages in PDF: ${numPages}`)
+      console.log(`Pages with text extracted: ${pageTexts?.length || 'N/A'}`)
+      console.log(`Total characters extracted: ${text.length}`)
+      
+      // Check for empty pages
+      if (pageTexts) {
+        const emptyPages = pageTexts.map((p, i) => p.length < 10 ? i + 1 : null).filter(p => p !== null)
+        if (emptyPages.length > 0) {
+          console.warn(`[WARN] Pages with little/no text: ${emptyPages.join(', ')}`)
+        }
+        
+        console.log(`\nCharacters per page (first 20):`)
+        pageTexts.slice(0, 20).forEach((p, i) => {
+          console.log(`  Page ${i + 1}: ${p.length} chars`)
+        })
+      }
+      
+      console.log(`\nFirst 1000 chars of extracted text:`)
+      console.log(text.substring(0, 1000))
+      console.log(`\n============================================`)
 
-    console.log(`Detected ${chapters.length} chapters`)
-    
-    // Log each chapter's length for debugging
-    let totalChapterChars = 0
-    chapters.forEach((ch, i) => {
-      console.log(`Chapter ${i} "${ch.title}": ${ch.text.length} characters`)
-      totalChapterChars += ch.text.length
-    })
-    
-    // Verify coverage
-    const coveragePercent = (totalChapterChars / text.length) * 100
-    console.log(`\n========== EXTRACTION VERIFICATION ==========`)
-    console.log(`Original text: ${text.length} chars`)
-    console.log(`Chapters total: ${totalChapterChars} chars`)
-    console.log(`Coverage: ${coveragePercent.toFixed(1)}%`)
-    if (coveragePercent < 90) {
-      console.error(`[WARN] Low coverage! Only ${coveragePercent.toFixed(1)}% of text was captured.`)
-      console.error(`Missing approximately ${text.length - totalChapterChars} characters`)
+      // Detect chapters with page-based extraction
+      chapters = await detectChapters(text, pageTexts)
+
+      if (chapters.length === 0) {
+        throw new Error('No chapters could be detected from the PDF')
+      }
+
+      console.log(`Detected ${chapters.length} chapters`)
+      
+      chapters.forEach((ch, i) => {
+        console.log(`Chapter ${i} "${ch.title}": ${ch.text.length} characters`)
+        totalChapterChars += ch.text.length
+      })
+      
+      // Verify coverage
+      const coveragePercent = (totalChapterChars / text.length) * 100
+      console.log(`\n========== EXTRACTION VERIFICATION ==========`)
+      console.log(`Original text: ${text.length} chars`)
+      console.log(`Chapters total: ${totalChapterChars} chars`)
+      console.log(`Coverage: ${coveragePercent.toFixed(1)}%`)
+      if (coveragePercent < 90) {
+        console.error(`[WARN] Low coverage! Only ${coveragePercent.toFixed(1)}% of text was captured.`)
+        console.error(`Missing approximately ${text.length - totalChapterChars} characters`)
+      }
+      console.log(`==============================================\n`)
     }
-    console.log(`==============================================\n`)
 
     // Save chapters
     await saveChapters(bookId, chapters)
