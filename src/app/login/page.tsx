@@ -28,30 +28,6 @@ export default function LoginPage() {
       const supabase = getSupabase()
       
       if (isMagicLink) {
-        // Check allowlist first
-        const { data: allowlistData, error: allowlistError } = await supabase
-          .from('allowlist_emails')
-          .select('email')
-          .eq('email', email.toLowerCase())
-          .maybeSingle()
-
-        // Debug logging
-        if (allowlistError) {
-          console.error('Allowlist query error:', allowlistError)
-          setMessage(`Error checking allowlist: ${allowlistError.message}`)
-          setLoading(false)
-          return
-        }
-
-        if (!allowlistData) {
-          console.log('Email not found in allowlist:', email.toLowerCase())
-          setMessage('Your email is not on the invite list. Please request access.')
-          setLoading(false)
-          return
-        }
-
-        console.log('Email found in allowlist:', allowlistData)
-
         const { error } = await supabase.auth.signInWithOtp({
           email: email.toLowerCase(),
           options: {
@@ -62,19 +38,6 @@ export default function LoginPage() {
         if (error) throw error
         setMessage('Check your email for the magic link!')
       } else {
-        // Check allowlist first for password login too
-        const { data: allowlistData, error: allowlistError } = await supabase
-          .from('allowlist_emails')
-          .select('email')
-          .eq('email', email.toLowerCase())
-          .maybeSingle()
-
-        if (allowlistError || !allowlistData) {
-          setMessage('Your email is not on the invite list. Please request access.')
-          setLoading(false)
-          return
-        }
-
         const { error } = await supabase.auth.signInWithPassword({
           email: email.toLowerCase(),
           password,
@@ -97,30 +60,7 @@ export default function LoginPage() {
     setMessage('')
 
     try {
-      // Check allowlist first
       const supabase = getSupabase()
-      const { data: allowlistData, error: allowlistError } = await supabase
-        .from('allowlist_emails')
-        .select('email')
-        .eq('email', email.toLowerCase())
-        .maybeSingle()
-
-      // Debug logging
-      if (allowlistError) {
-        console.error('Allowlist query error:', allowlistError)
-        setMessage(`Error checking allowlist: ${allowlistError.message}`)
-        setLoading(false)
-        return
-      }
-
-      if (!allowlistData) {
-        console.log('Email not found in allowlist:', email.toLowerCase())
-        setMessage('Your email is not on the invite list. Please request access.')
-        setLoading(false)
-        return
-      }
-
-      console.log('Email found in allowlist:', allowlistData)
 
       if (isMagicLink) {
         const { error } = await supabase.auth.signInWithOtp({
