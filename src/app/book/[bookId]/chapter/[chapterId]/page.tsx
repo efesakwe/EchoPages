@@ -69,11 +69,29 @@ export default async function ChapterPlayerPage({
   }
 
   // Fetch audio chunks
-  const { data: chunks } = await supabase
+  const { data: rawChunks } = await supabase
     .from('audio_chunks')
     .select('*')
     .eq('chapter_id', chapterId)
     .order('idx', { ascending: true })
+
+  // Refresh signed URLs for all completed chunks (they expire after 7 days)
+  const chunks = rawChunks ? await Promise.all(rawChunks.map(async (chunk) => {
+    if (chunk.status === 'done' && chunk.audio_url) {
+      // Extract the file path from the existing URL
+      // Audio files are stored as: audio/{chapterId}/{chunkIdx}.mp3
+      const filePath = `audio/${chapterId}/${chunk.idx}.mp3`
+      
+      const { data: signedData } = await supabase.storage
+        .from('books')
+        .createSignedUrl(filePath, 60 * 60 * 4) // 4 hour fresh URL
+      
+      if (signedData?.signedUrl) {
+        return { ...chunk, audio_url: signedData.signedUrl }
+      }
+    }
+    return chunk
+  })) : null
 
   // Fetch playback state
   const { data: playbackState } = await supabase
